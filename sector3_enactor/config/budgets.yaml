@@ -1,0 +1,9 @@
+version: "2026-09-01.1"
+default_execution_budget:
+  model_tokens: 200000
+  api_calls: 5000
+  ad_spend: { amount: 500.0, currency: USD }
+  purchases: { amount: 0.0, currency: USD }
+warning_threshold_percent: 80
+block_on_exhaustion: true          # overspend attempts are denied at the gateway, run pauses
+per_tool_cost_overrides: {}
