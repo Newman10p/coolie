@@ -1,0 +1,13 @@
+version: "2026-09-01.1"
+levels:
+  A0: { description: "Read-only; no approval required", default_expiry_hours: null }
+  A1: { description: "Internal draft; logged only", default_expiry_hours: 168 }
+  A2: { description: "Low-risk reversible action under pre-approved envelope", default_expiry_hours: 72 }
+  A3: { description: "Standard external action; explicit per-binding approval", default_expiry_hours: 24 }
+  A4: { description: "Irreversible / financial / production; named human approver", default_expiry_hours: 12 }
+policy_escalations:
+  # Context rules may RAISE a level, never lower it (§4.5).
+  - { when: "ad_budget_increase", raise_to: "A4" }
+  - { when: "production_deploy", raise_to: "A4" }
+  - { when: "first_contact_with_new_supplier", raise_to: "A3" }
+  - { when: "customer_message_volume_above_cap", raise_to: "A3" }

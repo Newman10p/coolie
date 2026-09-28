@@ -1,0 +1,20 @@
+version: "2026-09-01.1"
+connectors:
+  brain: { kind: llm, fake: true }
+  orchestrator: { kind: control_plane, fake: true }
+  research_room: { kind: sector_peer, fake: true }
+  email: { kind: messaging, fake: true }
+  messaging: { kind: messaging, fake: true }
+  store: { kind: commerce, fake: true }
+  inventory: { kind: commerce, fake: true }
+  supplier: { kind: commerce, fake: true }
+  repository: { kind: devtools, fake: true }
+  hosting: { kind: devtools, fake: true }
+  design: { kind: generation, fake: true }
+  social: { kind: marketing, fake: true }
+  advertising: { kind: marketing, fake: true }
+  analytics: { kind: data, fake: true }
+  seo: { kind: data, fake: true }
+rate_limits:
+  default_calls_per_minute: 60
+  email_send_per_minute: 10

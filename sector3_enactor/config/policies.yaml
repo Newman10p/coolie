@@ -1,0 +1,109 @@
+version: "2026-09-01.1"
+# Division → tool-name grants. Least privilege per document §8.1 rule 4:
+# agents only ever receive tools belonging to their own division plus shared read tools.
+divisions:
+  messengers:
+    - triage.classify_request
+    - triage.route_request
+    - email.read_inbox
+    - messaging.read_conversations
+    - store.read_orders
+    - store.read_customers
+    - tickets.create
+    - tickets.update
+    - email.send_approved
+    - messaging.send_approved
+    - supplier.draft_message
+    - supplier.send_approved
+    - internal.notify
+    - brain.complete
+  designers:
+    - design.generate_concept
+    - design.produce_asset_draft
+    - assets.store_version
+    - assets.advance_stage
+    - brain.complete
+  builders:
+    - repo.create_branch
+    - repo.commit_patch
+    - repo.open_pull_request
+    - sandbox.run_command
+    - ci.run_pipeline
+    - hosting.deploy_staging
+    - hosting.read_logs
+    - hosting.request_production_deploy
+    - hosting.rollback
+    - assets.store_version
+    - code.review_report
+  marketers:
+    - campaigns.draft
+    - campaigns.validate_policy
+    - campaigns.publish_approved
+    - campaigns.pause
+    - social.schedule_post
+    - social.publish_approved_post
+    - email.send_approved
+    - ads.get_metrics
+    - ads.recommend_optimization
+    - claims.check_marketing_claims
+    - assets.store_version
+    - analytics.read_campaign_metrics
+    - brain.complete
+  seo:
+    - seo.run_technical_audit
+    - seo.draft_content_brief
+    - seo.submit_changeset
+    - seo.apply_approved_changes
+    - analytics.read_search_performance
+    - assets.store_version
+    - brain.complete
+  commerce:
+    - store.read_orders
+    - catalog.create_draft
+    - catalog.update_draft
+    - catalog.validate_listing
+    - catalog.publish_approved
+    - inventory.preview_sync
+    - inventory.apply_sync
+    - inventory.alert_low_stock
+    - fulfillment.route_order
+    - fulfillment.update_tracking
+    - returns.recommend
+    - supplier.draft_message
+    - supplier.send_approved
+    - brain.complete
+  qa:
+    - qa.evaluate_output
+    - qa.block_release
+    - qa.run_design_qa
+    - code.review_report
+    - claims.check_marketing_claims
+    - campaigns.validate_policy
+    - catalog.validate_listing
+    - assets.advance_stage
+    - assets.store_version
+    - internal.notify
+  analytics:
+    - analytics.read_campaign_metrics
+    - analytics.read_store_metrics
+    - analytics.read_search_performance
+    - analytics.collect_business_metrics
+    - analytics.detect_anomalies
+    - analytics.report_outcome
+    - research.submit_outcome
+    - ads.get_metrics
+    - hosting.read_logs
+    - internal.notify
+    - brain.complete
+shared_read_tools:
+  - store.read_products
+  - analytics.read_store_metrics
+escalation_routes:
+  payment_dispute: finance
+  legal_message: human
+  returns_request: finance
+  refund_request: finance
+  compensation_request: human
+  account_change: human
+  policy_exception: human
+  medical_or_safety_claim: human

@@ -1,0 +1,20 @@
+version: "2026-09-01.1"
+# Enumerated autonomous responses (§5.9): anything not listed here escalates instead of acting.
+auto_actions:
+  - id: pause_campaign_on_stop_condition
+    trigger_metric: campaign_cost_per_acquisition
+    requires_matching_plan_stop_condition: true
+    allowed_tool: campaigns.pause
+  - id: escalate_supplier_delay
+    trigger_metric: supplier_delay_days
+    threshold: 5
+    allowed_tool: internal.notify
+  - id: open_ticket_surge_alert
+    trigger_metric: support_volume_hourly
+    threshold: 50
+    allowed_tool: internal.notify
+hard_stops:
+  - budget_exhausted
+  - circuit_breaker_open
+  - repeated_approval_denial
+  - quality_gate_failure

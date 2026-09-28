@@ -1,0 +1,17 @@
+version: "2026-09-01.1"
+limits:
+  customer_messages_per_hour: 50        # §8.4
+  supplier_messages_per_mission: 20
+  bulk_email_batch_max: 100
+  social_posts_per_day: 5
+quiet_hours_utc: { start: "22:00", end: "07:00", applies_to: [customer] }
+outbound_requires_template: true
+recipient_allowlists_required_for: [supplier, internal]
+restricted_intents_always_escalate:
+  - returns_request
+  - payment_dispute
+  - legal_message
+  - compensation_request
+  - account_change
+  - policy_exception
+  - medical_or_safety_claim
