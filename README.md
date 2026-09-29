@@ -1,119 +1,94 @@
-# Coolie Research Room (Sector 2)
+# Coolie
 
-The Research Room is Coolie's read-only business-intelligence and opportunity-validation sector. It accepts typed research missions, produces a dependency-aware plan, records evidence, enforces least-privilege tool policy, and prepares only internal handoff packets. It **cannot** purchase, publish, contact customers, transfer money, or make final business decisions.
+Coolie is an AI-operated business workroom built around a simple boundary: the owner interface presents information and captures intent, while backend services retain responsibility for policy, financial calculations, authorization, compliance, approval validation, execution, and audit records.
 
-## First implementation
+The repository contains early, standard-library Python implementations of Coolie's core domains, a shared in-process reliability layer, and a responsive owner-workroom UI. It is a development foundation, not a production-ready operating system: external provider integrations, durable infrastructure, a production owner API, and deployment controls still need to be supplied and validated.
 
-This initial, dependency-free Python package establishes the sector boundary:
+## Product model
 
-- typed mission, task, evidence, opportunity, and recommendation contracts;
-- mission validation and explicit lifecycle transitions;
-- task planning, dependency scheduling, retry limits, and output quality checks;
-- evidence confidence aggregation and traceable source records;
-- configurable opportunity scoring plus non-negotiable risk/budget/margin overrides;
-- scoped tool permissions and audit-event creation;
-- typed recommendation packets ready for financial, strategy, and orchestrator handoffs.
+The owner works through the **Orchestrator**, which coordinates decisions and bounded mandates across specialist domains:
 
-## Current guarantees
+| Domain | Responsibility |
+| --- | --- |
+| **Brain** | Provider-neutral model routing, scoped agent sessions, context and memory, delegation, usage limits, and inference audit records. |
+| **Research Room** | Read-only missions, dependency-aware research work, evidence and source records, opportunity evaluation, and internal recommendations. |
+| **Finance & Activation** | Assessment of proposed spend, expected revenue, margin, confidence, risk, budget limits, and activation recommendations. It does not control a live wallet or independently authorize spending. |
+| **Enactor** | Compiles and runs approval-bound plans through a constrained tool gateway, with budgets, policy checks, state tracking, and execution audit records. |
+| **Evolver** | Assesses capability gaps for proposed business domains and produces extension plans, required assets, and validation steps. It does not itself make an extension production-live. |
+| **Report Collector** | Collects component and sector health into operational snapshots and reports without changing the state it observes. |
+| **Reliability layer** | Shared readiness, heartbeat, incident/log records, dependency health, and emergency pause/resume controls for composed services. |
 
-- Invalid domain inputs, task graphs, incomplete scorecards, mismatched currencies, and premature lifecycle submissions are rejected or held for more research.
-- Every forward lifecycle transition is attributable to an actor and reason; submission also requires documented financial, strategy, recommendation, budget, stop-condition, and high-severity-risk gates.
-- Tasks cannot run until their dependencies complete; failed, blocked, and cancelled prerequisites block downstream work.
-- The tool policy only permits `research:` capabilities and emits canonical, deterministic audit hashes. The Research Room still has no live connectors, API, or Enactor execution authority.
+Architecture documents use different sector numbers in places. This README uses domain names to avoid confusing role labels with ordinal numbering. The Orchestrator is the owner-facing executive control plane, not an additional specialist department.
 
-## Phase 1 persistence and configuration
+## Safety and authority boundaries
 
-- Repository contracts and deterministic in-memory implementations now cover missions, tasks, opportunities, immutable evidence/source snapshots/reports, audit events, and versioned sector configuration.
-- Immutable source/report artifacts can be held in memory or local development storage; a PostgreSQL schema migration is provided for durable production adapters and an S3-compatible adapter can implement the same object-storage contract.
-- Scoring, budgets, agent permissions, source quality, and retention settings are validated and versioned so a historical mission can retain the policy used to evaluate it.
-- The package deliberately does not yet ship a database driver or live PostgreSQL/S3 connector. Infrastructure adapters belong to deployment configuration and must conform to these contracts.
+- A recommendation, forecast, or proposed plan is not an approval or proof of available funds.
+- The UI can display and submit owner intent, but it is not an authentication or authorization boundary.
+- The Research Room is read-only and cannot purchase, publish, message customers, transfer money, or invoke external Enactor actions.
+- The Finance & Activation service returns an assessment; it does not connect to a wallet, reconcile a ledger, or execute an investment.
+- Enactor actions are mediated by its policy, approval, budget, and tool-gateway layers. Real external connectors and operational credentials must be configured separately.
+- Emergency pause blocks new work only where services share the configured reliability runtime. It does not undo an action already in flight.
+- Provider credentials and production secrets are deployment responsibilities. Do not put provider keys, payment credentials, or other secrets in the browser or repository.
 
-Run the tests with:
+## Repository map
+
+```text
+brain/                 Intelligence, provider boundary, sessions, memory, and inference
+research_room/         Research missions, evidence, planning, and recommendations
+orchestrator/           Owner objectives, decisions, policy gates, and mandates
+money_calculator/       Finance and activation assessment
+sector3_enactor/        Approval-bound plan execution and tool gateway
+evolver/                Capability-expansion assessment
+report_collector/       Operational snapshots and component reports
+reliability/            Shared health, heartbeat, incident, and failsafe primitives
+coolie_runtime.py       Composition root for the seven domains and shared failsafe
+ui/                     Owner workroom interface and local sample preview server
+tests/                  Standard-library unittest suite
+migrations/             Sector-specific schema artifacts where present
+```
+
+Each domain has its own models, controller/service logic, and in several cases a small HTTP-style or WSGI API. These APIs are sector boundaries and testable integration points; they do not collectively form a deployed web application or a complete owner-facing backend-for-frontend (BFF).
+
+## Local development
+
+The Python packages use the standard library and require Python 3.11 or newer. From the repository root:
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-External connectors and real-world Enactor actions are deliberately not implemented in this sector.
-
-## Delivered workflow capabilities
-
-The Research Room now plans product/service research tasks, runs registered narrow agents through a controller-owned read-only connector gateway, captures immutable source artifacts, sanitizes untrusted source text, extracts basic public facts, registers and verifies evidence, generates immutable reports, retains outcome learning records, and exposes a small WSGI mission API (create, get, pause, resume, cancel, progress). External provider adapters remain deployment concerns: no connector in this package can spend, publish, purchase, message customers, or call the Enactor.
-
-## Sector 0: The Brain
-
-The Brain is the provider-neutral intelligence and governance plane described in the supplied Coolie architecture DOCX. Its six-stage minimum viable foundation is implemented in the standard-library `brain` package:
-
-- Provider adapters receive expiring credentials only through the Brain gateway and must translate provider exceptions to sanitized `ProviderError`s. `EnvironmentSecretManager` is a development adapter; production should inject a managed secret-store implementation.
-- Registered agents receive expiring, revocable, task-scoped session tokens with operation, memory, token, and cost limits. Model profiles are routed by capability, sector, and registered agent permissions.
-- Inference applies per-request authorization, estimated cost preflight plus provider-reported usage accounting, context-reference and sensitivity filtering, a common JSON-Schema subset validator, secret-leak rejection, and content-hash audit records. If a provider reports usage above a request's reserved ceiling, the overrun is recorded and the output is blocked; charges already incurred at the provider cannot be undone.
-- Memory namespaces, bounded approval-aware delegation, and an append-only in-process event bus with retryable subscriber delivery provide isolated coordination primitives.
-- Provider health, fallback profiles, circuit breakers, and an explicit emergency pause support degraded operation.
-
-There is no provider key, live provider adapter, persistent Brain database, or production secret-store integration in this repository. Those are deployment-provided interfaces, not silently configured defaults. `BrainResearchAgent` can be registered with the Research Room's existing agent registry to route a research task through an explicitly configured Brain; its session-issuer and revoker callbacks must be supplied by trusted orchestration code and issue only the scopes needed for that task. The WSGI boundary exposes authenticated `POST /brain/inference` and unauthenticated `GET /brain/health`; only the session token is accepted from callers, never a provider credential. Memory search is lexical and in-process, not embedding/vector search; delegation reserves its full declared cap against the parent task; persistence, full JSON Schema, provider-specific adapters, and managed event delivery remain deployment work.
-
-For local development, configure a provider adapter, model profiles, agent policies, and `EnvironmentSecretManager` explicitly in application composition. Run the standard-library test suite with:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-## Sector 4: Business Finance / Money Calculator / Activation Manager
-
-The actual Sector 4 layer in the architecture is the business-finance and activation plane: it evaluates planned spend, expected revenue, margin, risk, and confidence before a real activation is approved. This package complements the earlier governance-oriented Orchestrator and keeps the business decision logic explicitly separate from the policy-enforcement layer.
-
-The first implementation adds:
-
-- typed activation proposals with predicted revenue, margin, and confidence gates;
-- spend approval logic that rejects unprofitable or weak-evidence activations;
-- budget-cap checks and owner-approval requests before exceeding a signed limit;
-- a deterministic finance recommendation record with ROI and payback insights;
-- a small WSGI boundary for assessment requests and decision records.
-
-This sector remains bounded by design: it can recommend or gate spending, but it does not bypass policy, Sharia, operational risk, or owner approval gates. Those controls remain enforced by the governance stack around it.
-
-## Sector 5: The Evolver
-
-The Evolver is the controlled capability-expansion layer described in the updated Word architecture. It evaluates a proposed new business domain, identifies what Coolie already supports, highlights capability gaps, estimates the required agents, tools, connectors, policies, and data models, and produces a validated extension plan for approval.
-
-The implementation adds:
-
-- expansion requests and capability-gap models;
-- a controller that maps missing capabilities to required build components;
-- cost and revenue viability checks for the proposed extension;
-- a plan object that captures required assets, testing steps, and reusability guidance.
-
-## Sector 6: The Report Collector
-
-The Report Collector gathers the current operational picture from the live system and produces an operational snapshot that can be handed to the Orchestrator for presentation through the UI. It is designed to auto-discover system components and present a coherent health summary without directly changing policy or state.
-
-The implementation adds:
-
-- system component records with status and ownership metadata;
-- snapshot generation with health ratios and alert counts;
-- directory-based discovery of Python modules and their current status;
-- a small API surface for health and discovery operations.
-
-## Shared reliability and failsafe
-
-All sector services and the Enactor tool gateway use the same process-wide `ReliabilityRuntime` by default. Applications can inject a fresh runtime for isolation, or compose all seven sector services through [coolie_runtime.py](./coolie_runtime.py), which requires explicit startup checks, binds the shared emergency pause, and registers service heartbeats. When the pause is active, Brain inference, research execution, business decisions, finance assessments, capability planning, and Enactor execution fail closed. Report collection and read-only health inspection remain available.
-
-The reliability package provides liveness/startup/readiness/dependency probes, heartbeat staleness and progress assessment, incident records, structured event records with sensitive-field redaction, and an authenticated WSGI pause/resume interface. Operator control is unavailable unless the application supplies an authentication callback. The Report Collector can build snapshots from registered sector health.
-
-This is a local reliability foundation, not production durability: heartbeats, incidents, logs, workflow state, and Enactor idempotency records are currently in memory. The repository does not yet have a durable queue/event store, database-backed ledger or reconciliation worker, service supervisors, distributed leases, telemetry exporter, or deployment-level graceful-shutdown integration. Those adapters and staging failure/soak tests are required before enabling production external actions. Run local tests with:
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-## Owner workroom UI
-
-The dependency-free, responsive owner interface is in [`ui/`](./ui/). Its navy-and-blue workroom theme follows the UI brief's blue, gold, and metallic plate tokens. The global Orchestrator drawer includes push-to-talk audio capture, a visible transcript, always-available text input, and opt-in speech output. Audio is uploaded only after recording stops and only to a configured owner BFF; local preview recordings are discarded. A real integration must implement `POST /api/orchestrator/transcribe` and `POST /api/orchestrator/messages`; voice recognition never authorizes or executes actions. Run the local sample server from the repository root:
+To start the owner-workroom preview:
 
 ```bash
 python -m ui.demo_server
 ```
 
-Then open `http://localhost:4173`. This server supplies sample owner read models at `/api/ui/briefing`, `/api/ui/office-table`, and `/api/ui/reports` so the connected UI can be exercised. All responses are marked as sample data and the interface labels them as such; none are connected to business, wallet, approval, or sector state. The sample server does not provide real readiness checks, Orchestrator messaging, speech transcription, or emergency pause/resume. It is a UI development fixture, not a backend for operating Coolie.
+Open [http://localhost:4173](http://localhost:4173). The preview server binds to `127.0.0.1` by default. It serves the static UI and fabricated sample read models at `/api/ui/briefing`, `/api/ui/office-table`, and `/api/ui/reports`. These records are visibly labeled as samples and are not connected to business, wallet, approval, or sector state. The preview server reports readiness as unavailable and does not implement Orchestrator messaging, speech transcription, or emergency controls.
 
-To connect a real owner BFF, configure its same-origin API base path (for example, `/api`) in Settings. The BFF must expose those three owner read models plus authenticated reliability routes under that prefix. The repository does not yet implement production owner aggregation. Missing live data is shown as unavailable rather than replaced with preview values.
+The interface includes push-to-talk capture, a visible transcript, text input, and opt-in speech output. Voice is an input modality only: recognition cannot authorize or execute consequential actions. Audio capture requires browser microphone support and a secure context. In local sample mode, audio is discarded without upload. A real BFF must implement and secure the configured voice/message endpoints before those capabilities can work against Coolie.
+
+## Composition and reliability
+
+`CoolieSystem` in [coolie_runtime.py](./coolie_runtime.py) binds the seven domain services and the Enactor tool gateway to one shared `ReliabilityRuntime`. Composition requires explicit startup-check results for every domain; constructing service objects alone does not mark the system ready. Applications supply the services, dependency results, instance identity, and (if operator controls are enabled) an authentication callback.
+
+The reliability API exposes liveness, startup, readiness, and dependency probes, along with authenticated pause/resume routes. The Report Collector can build a snapshot from registered sector health. To construct the root, instantiate each service and pass the complete service mapping plus explicit startup checks to `CoolieSystem`; see [the composition root](./coolie_runtime.py) and [its integration tests](./tests/test_reliability.py).
+
+This reliability implementation is in-process and intended for local development and tests. Heartbeats, incidents, structured logs, domain workflow state, and Enactor idempotency records are not durable or coordinated across multiple processes. Production use requires appropriate persistent queues/stores, durable financial ledger and reconciliation, distributed coordination, worker supervision, telemetry/export, graceful shutdown, and tested recovery procedures.
+
+## Current integration limits
+
+- There is no production deployment entry point or unified web server for the sector APIs.
+- There is no production owner BFF aggregating briefing, portfolio, financial, decisions, reports, or Orchestrator interactions. The UI currently uses its local sample service or a same-origin BFF supplied by an integrating application.
+- No live model provider, managed secret store, production PostgreSQL/S3 adapter, or customer-facing Enactor connector is configured by default.
+- Sector persistence varies; some repositories and artifact interfaces are in-memory or development-oriented. Schema files and interfaces do not by themselves provide a durable production database.
+- The local emergency pause is not distributed, durable, or a substitute for infrastructure-level kill switches and incident response.
+
+Treat these limits as deployment requirements, not as features implied by the preview. Before enabling consequential external actions, configure authenticated owner access, durable state and audit, verified integrations, financial reconciliation, monitoring, and end-to-end recovery tests.
+
+## Contribution and verification
+
+Keep sector responsibilities narrow, preserve explicit approval and policy boundaries, and do not present sample, stale, estimated, or forecast data as confirmed actual state. Add or update focused tests with behavioral changes, then run the full suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
