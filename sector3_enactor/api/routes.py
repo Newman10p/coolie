@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from reliability import SystemPausedError
+
 from ..controller.execution_controller import ExecutionController
 from ..handoffs.inbound import execution_from_proposal
 from ..models.approval import ApprovalLevel
@@ -51,7 +53,10 @@ class EnactorApi:
             plan = self.controller.compile_plan(request, tuple(parsed))
         except ValueError as error:
             return ApiResponse(422, {"error": str(error)})
-        outcome = self.controller.submit(request, plan, payload.get("context", {}))
+        try:
+            outcome = self.controller.submit(request, plan, payload.get("context", {}))
+        except SystemPausedError as error:
+            return ApiResponse(503, {"error": str(error), "status": "paused"})
         code = 202 if outcome.result.status.value in ("awaiting_approval",) else 200
         return ApiResponse(code, {"executionId": outcome.result.execution_id, "status": outcome.result.status.value,
                                   "planHash": plan.plan_hash,
@@ -68,8 +73,12 @@ class EnactorApi:
         plan = self.controller._plan_registry.get(plan_hash) if plan_hash else None
         if plan is None or plan.execution_id != execution_id:
             return ApiResponse(422, {"error": "planHash must reference the registered compiled plan."})
-        self.controller.close_execution_circuit(execution_id)
-        outcome = self.controller.resume(stored, plan, payload.get("context", {}))
+        try:
+            self.controller.reliability.ensure_work_allowed("Enactor execution resume")
+            self.controller.close_execution_circuit(execution_id)
+            outcome = self.controller.resume(stored, plan, payload.get("context", {}))
+        except SystemPausedError as error:
+            return ApiResponse(503, {"error": str(error), "status": "paused"})
         code = 202 if outcome.result.status.value in ("awaiting_approval",) else 200
         return ApiResponse(code, {"executionId": execution_id, "status": outcome.result.status.value,
                                   "summary": outcome.result.summary})
@@ -99,3 +108,12 @@ class EnactorApi:
                                              "agent": e.agent_id, "approval": e.approval_id,
                                              "operation": e.external_operation_id, "hash": e.event_hash}
                                             for e in events]})
+
+    def get_health(self) -> ApiResponse:
+        paused = self.controller.reliability.failsafe.paused
+        return ApiResponse(503 if paused else 200, {
+            "service": "enactor",
+            "status": "paused" if paused else "ok",
+            "ready": not paused,
+            "reason": self.controller.reliability.failsafe.reason,
+        })

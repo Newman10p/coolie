@@ -5,16 +5,17 @@ from sector3_enactor.config.loader import load_sector_config
 from sector3_enactor.connectors.fake import build_fake_connectors, wire_gateway
 from sector3_enactor.controller.execution_controller import ExecutionController
 from sector3_enactor.models.approval import ApprovalLevel
-from sector3_enactor.models.execution import ExecutionRequest
+from sector3_enactor.models.execution import ActionRequest, ExecutionRequest
 from sector3_enactor.models.messaging import (
     ConversationParty,
     InboundMessage,
     MessageChannel,
     MessageDirection,
 )
-from sector3_enactor.models.shared import Money, StopCondition, SuccessMetric, ToolMode
+from sector3_enactor.models.shared import Money, RiskSeverity, StopCondition, SuccessMetric, ToolMode
 from sector3_enactor.models.task import EnactorTask
 from sector3_enactor.tools.definitions import build_default_registry
+from sector3_enactor.tools.gateway import GatewayContext
 
 
 class EnactorCoreTests(unittest.TestCase):
@@ -24,6 +25,125 @@ class EnactorCoreTests(unittest.TestCase):
         self.assertEqual(config.version, "2026-09-01.1")
         self.assertIn("email.send_approved", registry.names())
         self.assertEqual(registry.get("email.send_approved").approval_level, ApprovalLevel.A3_STANDARD)
+
+    def test_external_action_idempotency_is_bound_and_replayed_once(self):
+        config = load_sector_config()
+        registry = build_default_registry()
+        controller = ExecutionController(config=config, registry=registry)
+        connectors = build_fake_connectors()
+        wire_gateway(controller.gateway, registry.names(), connectors)
+        task = EnactorTask(
+            task_id="T-IDEMPOTENT",
+            execution_id="E-IDEMPOTENT",
+            agent_role="messengers.support_triage",
+            objective="Send approved customer response",
+            tool="email.send_approved",
+            arguments={"recipient": "customer@example.com"},
+            allowed_tools=("email.send_approved",),
+            mode=ToolMode.EXTERNAL_ACTION,
+        )
+        request = ExecutionRequest(
+            execution_id="E-IDEMPOTENT",
+            business_id="B-IDEMPOTENT",
+            plan_id="P-IDEMPOTENT",
+            objective="Send a customer response",
+        )
+        plan = controller.compile_plan(request, (task,))
+        controller.budgets.open_ledger(request.execution_id, config.budgets)
+        arguments = {
+            "recipient": "customer@example.com",
+            "subject": "Order update",
+            "body": "Your order is on the way.",
+        }
+        context = GatewayContext(
+            business_id=request.business_id,
+            execution_id=request.execution_id,
+            task_id=task.task_id,
+            agent_role=task.agent_role,
+            agent_id="messengers.support_triage@E-IDEMPOTENT",
+            allowed_tools=task.allowed_tools,
+            plan_hash=plan.plan_hash,
+            requested_mode=ToolMode.EXTERNAL_ACTION,
+        )
+        preview = controller.gateway.execute(
+            context,
+            ActionRequest(
+                action_id="A-PREVIEW",
+                tool="email.send_approved",
+                arguments={**arguments, "dryRun": True},
+                risk_level=RiskSeverity.HIGH,
+                required_approval_level=ApprovalLevel.A3_STANDARD.value,
+                reversible=False,
+                idempotency_key="send-001",
+            ),
+        )
+        self.assertEqual(preview.status, "success")
+
+        approval = controller.approval_policy.request(
+            execution_id=request.execution_id,
+            business_id=request.business_id,
+            task=task,
+            agent_id=context.agent_id,
+            tool="email.send_approved",
+            target=arguments["recipient"],
+            exact_arguments=arguments,
+            level=ApprovalLevel.A3_STANDARD,
+            risk=RiskSeverity.HIGH,
+            reason="Owner-approved response.",
+        )
+        controller.approve(approval.approval_id, decided_by="owner", level=ApprovalLevel.A3_STANDARD)
+        bound_context = GatewayContext(
+            business_id=context.business_id,
+            execution_id=context.execution_id,
+            task_id=context.task_id,
+            agent_role=context.agent_role,
+            agent_id=context.agent_id,
+            allowed_tools=context.allowed_tools,
+            plan_hash=context.plan_hash,
+            requested_mode=context.requested_mode,
+            approval_id=approval.approval_id,
+        )
+        action = ActionRequest(
+            action_id="A-SEND",
+            tool="email.send_approved",
+            arguments=arguments,
+            risk_level=RiskSeverity.HIGH,
+            required_approval_level=ApprovalLevel.A3_STANDARD.value,
+            reversible=False,
+            idempotency_key="send-001",
+        )
+        sent = controller.gateway.execute(bound_context, action)
+        replay = controller.gateway.execute(
+            bound_context,
+            ActionRequest(
+                action_id="A-SEND-RETRY",
+                tool=action.tool,
+                arguments=arguments,
+                risk_level=RiskSeverity.HIGH,
+                required_approval_level=ApprovalLevel.A3_STANDARD.value,
+                reversible=False,
+                idempotency_key="send-001",
+            ),
+        )
+        self.assertEqual(sent.status, "success", sent.error)
+        self.assertTrue(replay.output["deduplicated"])
+        self.assertEqual(len(connectors["email"].calls), 2)
+
+        drifted = controller.gateway.execute(
+            bound_context,
+            ActionRequest(
+                action_id="A-DRIFT",
+                tool=action.tool,
+                arguments={**arguments, "body": "different text"},
+                risk_level=RiskSeverity.HIGH,
+                required_approval_level=ApprovalLevel.A3_STANDARD.value,
+                reversible=False,
+                idempotency_key="send-001",
+            ),
+        )
+        self.assertEqual(drifted.status, "denied")
+        self.assertIn("idempotency_conflict", drifted.error)
+        self.assertEqual(len(connectors["email"].calls), 2)
 
     def test_support_triage_handles_inbound_message_and_required_approval(self):
         config = load_sector_config()

@@ -11,6 +11,7 @@ from typing import Any
 import secrets
 
 from research_room.models import Money
+from reliability import ReliabilityRuntime, default_reliability_runtime
 
 from .budget import BudgetExceeded, BudgetManager
 from .delegation import DelegationManager
@@ -133,6 +134,7 @@ class BrainService:
         failure_threshold: int = 3,
         circuit_reset_seconds: float = 30,
         delegations: DelegationManager | None = None,
+        reliability: ReliabilityRuntime | None = None,
     ) -> None:
         self._agents = agents
         self._sessions = sessions
@@ -149,6 +151,7 @@ class BrainService:
         self._delegations = delegations or DelegationManager()
         self._delegation_reservations: dict[str, str] = {}
         self._pause_controller = EmergencyPause()
+        self.reliability = reliability or default_reliability_runtime()
         self._audits: list[InferenceAudit] = []
         self._usage: list[UsageRecord] = []
         self._circuits = {
@@ -167,8 +170,9 @@ class BrainService:
         return self._events.events()
 
     def emergency_stop(self, reason: str, *, authority: str) -> tuple[AgentSession, ...]:
-        if not authority.strip():
+        if not isinstance(authority, str) or not authority.strip():
             raise PermissionError("Emergency-pause authority is required.")
+        self.reliability.emergency_pause(reason, authority=authority)
         self._pause_controller.pause(reason)
         revoked = self._sessions.revoke_all()
         self._events.publish(
@@ -179,6 +183,8 @@ class BrainService:
         return revoked
 
     def restart(self, *, authority: str) -> None:
+        if self.reliability.failsafe.paused:
+            self.reliability.resume(authority=authority)
         self._pause_controller.resume(authority=authority)
         self._events.publish(
             "brain.emergency_restarted", source="brain", payload={},
@@ -208,6 +214,7 @@ class BrainService:
         token_limit: int | None = None,
         cost_limit: Money | None = None,
     ):
+        self.reliability.ensure_work_allowed("Brain session creation")
         self._pause_controller.check()
         agent = self._agents.get(agent_id)
         grant = self._sessions.create(
@@ -335,6 +342,7 @@ class BrainService:
         return completed
 
     def complete(self, request: InferenceRequest, *, session_id: str, session_token: str) -> InferenceResponse:
+        self.reliability.ensure_work_allowed("Brain inference")
         self._pause_controller.check()
         input_data = json.loads(canonical_json(request.input))
         request_hash = content_hash(input_data)
@@ -689,8 +697,25 @@ class BrainService:
                 "state": self._circuits[provider_id].state,
                 "health": provider_health,
             }
+        usable_provider = any(
+            provider["health"] in {"healthy", "degraded", "rate_limited"}
+            and provider["state"] != "open"
+            for provider in providers.values()
+        )
+        is_paused = self._pause_controller.reason is not None or self.reliability.failsafe.paused
+        status = "paused" if is_paused else (
+            "ready" if usable_provider else "not_ready"
+        )
+        if usable_provider and any(
+            provider["health"] != "healthy" or provider["state"] != "healthy"
+            for provider in providers.values()
+        ):
+            status = "degraded"
         return {
-            "status": "paused" if self._pause_controller.reason is not None else "ready",
+            "status": status,
+            "live": True,
+            "ready": usable_provider and not is_paused,
+            "dependencies": providers,
             "providers": providers,
         }
 

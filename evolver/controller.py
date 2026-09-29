@@ -28,9 +28,13 @@ class EvolverController:
         required_policies = tuple(f"{cap}-policy" for cap in missing)
         required_data_models = tuple(f"{cap}-model" for cap in missing)
         estimated_cost = self._estimate_cost(len(missing), len(required_tools), len(required_connectors), request)
-        revenue = request.expected_monthly_revenue or Money(estimated_cost.amount * 1.5, estimated_cost.currency)
+        revenue = request.expected_monthly_revenue
         financially_viable = True
         if request.max_budget is not None and estimated_cost.amount > request.max_budget.amount:
+            financially_viable = False
+        elif revenue is None:
+            financially_viable = False
+        elif revenue.currency != estimated_cost.currency:
             financially_viable = False
         elif revenue.amount <= 0:
             financially_viable = False

@@ -6,13 +6,17 @@ Agents hold no credentials; only this gateway talks to connectors (§8.2)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 from typing import Any, Callable
+
+from reliability import ReliabilityRuntime, default_reliability_runtime
 
 from ..models.approval import ApprovalLevel, ApprovalRequest, ApprovalStatus
 from ..models.execution import ActionRequest, ActionResult
 from ..models.shared import MODE_ORDER, Money, ToolMode, now_utc
 from ..policy.approval_policy import ApprovalPolicy
 from ..policy.authorization_engine import AuthorizationEngine
+from ..policy.hashing import digest
 from ..runtime.budget import BudgetTracker
 from ..storage.audit_repository import AuditRepository
 from ..storage.repositories import ApprovalRepository
@@ -46,7 +50,7 @@ class RateLimiter:
 class ToolGateway:
     def __init__(self, *, registry: ToolRegistry, authorizer: AuthorizationEngine, approvals: ApprovalRepository,
                  approval_policy: ApprovalPolicy, audit: AuditRepository, budgets: BudgetTracker,
-                 rate_limit_per_minute: int = 60) -> None:
+                 rate_limit_per_minute: int = 60, reliability: ReliabilityRuntime | None = None) -> None:
         self._registry = registry
         self._authorizer = authorizer
         self._approvals = approvals
@@ -58,9 +62,11 @@ class ToolGateway:
         self._dry_run_previews: set[str] = set()   # keys: execution|task|tool
         self._circuit_open: dict[str, str] = {}     # execution_id -> reason
         self._limiter = RateLimiter(rate_limit_per_minute)
+        self.reliability = reliability or default_reliability_runtime()
         # Idempotency ledger (§8.1 rule 7): a retried external action with the same
         # key returns the recorded result and NEVER touches the connector twice.
-        self._executed: dict[str, ActionResult] = {}
+        self._executed: dict[str, tuple[str, ActionResult | None]] = {}
+        self._idempotency_lock = RLock()
 
     # -- wiring -------------------------------------------------------------
     def register_connector(self, account: ConnectorAccount, tool_names: tuple[str, ...],
@@ -83,6 +89,10 @@ class ToolGateway:
 
     # -- core ---------------------------------------------------------------
     def execute(self, context: "GatewayContext", request: ActionRequest) -> ActionResult:
+        try:
+            self.reliability.ensure_work_allowed("Enactor tool execution")
+        except PermissionError as error:
+            return self._deny(context, request, "system_pause", str(error))
         tool_name = request.tool
         definition = self._registry.get(tool_name)
         if definition is None:
@@ -109,18 +119,31 @@ class ToolGateway:
 
         # Idempotent replay (§8.1 rule 7): same execution+task+tool+key already ran →
         # return the recorded result without re-invoking the connector or re-spending.
+        replay_key: str | None = None
+        request_hash: str | None = None
         if definition.mode is ToolMode.EXTERNAL_ACTION and request.idempotency_key:
             replay_key = f"{context.execution_id}|{context.task_id}|{tool_name}|{request.idempotency_key}"
-            prior = self._executed.get(replay_key)
+            request_hash = digest({
+                "tool": tool_name,
+                "arguments": request.arguments,
+                "approval_id": context.approval_id,
+                "amount": context.amount,
+                "requested_mode": context.requested_mode,
+            })
+            with self._idempotency_lock:
+                prior = self._executed.get(replay_key)
             if prior is not None:
-                self._audit.append(event_type="gateway_replay", business_id=context.business_id,
-                                   execution_id=context.execution_id, task_id=context.task_id,
-                                   agent_id=context.agent_id, tool=tool_name, approval_id=context.approval_id,
-                                   external_operation_id=prior.external_operation_id,
-                                   detail={"idempotencyKey": request.idempotency_key, "deduplicated": True})
-                return ActionResult(action_id=request.action_id, status=prior.status,
-                                    output={**prior.output, "deduplicated": True},
-                                    error=prior.error, external_operation_id=prior.external_operation_id)
+                if prior[0] != request_hash:
+                    return self._deny(
+                        context, request, "idempotency_conflict",
+                        "Idempotency key was previously used with a different action binding.",
+                    )
+                if prior[1] is None:
+                    return self._deny(
+                        context, request, "idempotency_in_progress",
+                        "Action outcome is unresolved; reconcile it before retrying.",
+                    )
+                return self._replay(context, request, request.idempotency_key, prior[1])
 
         # Dry-run-before-irreversible rule (§8.1 rule 9): external irreversible actions
         # must have a recorded dry-run preview for the same binding first.
@@ -128,7 +151,10 @@ class ToolGateway:
         wants_dry_run = bool(request.arguments.get("dryRun"))
         if definition.mode is ToolMode.EXTERNAL_ACTION and not definition.reversible:
             if wants_dry_run:
-                return self._invoke(context, request, definition, dry_run=True)
+                preview = self._invoke(context, request, definition, dry_run=True)
+                if preview.status == "success":
+                    self._dry_run_previews.add(preview_key)
+                return preview
             if preview_key not in self._dry_run_previews:
                 return self._deny(context, request, "dry_run_required",
                                   "Irreversible external action requires a prior dry-run preview of the same binding.")
@@ -170,14 +196,31 @@ class ToolGateway:
         if not self._limiter.allow(f"{context.execution_id}:{tool_name}", now_utc()):
             return self._deny(context, request, "rate_limit", f"Rate limit exceeded for {tool_name}.")
 
+        if replay_key is not None and request_hash is not None:
+            with self._idempotency_lock:
+                prior = self._executed.get(replay_key)
+                if prior is not None:
+                    if prior[0] != request_hash:
+                        return self._deny(
+                            context, request, "idempotency_conflict",
+                            "Idempotency key was previously used with a different action binding.",
+                        )
+                    if prior[1] is None:
+                        return self._deny(
+                            context, request, "idempotency_in_progress",
+                            "Action outcome is unresolved; reconcile it before retrying.",
+                        )
+                    return self._replay(context, request, request.idempotency_key, prior[1])
+                self._executed[replay_key] = (request_hash, None)
         ledger.reserve(definition.budget_type, cost)
         try:
             result = self._invoke(context, request, definition, dry_run=wants_dry_run)
             if result.status == "success":
                 ledger.commit(definition.budget_type, cost)
                 if not wants_dry_run:
-                    if definition.mode is ToolMode.EXTERNAL_ACTION and request.idempotency_key:
-                        self._executed[f"{context.execution_id}|{context.task_id}|{tool_name}|{request.idempotency_key}"] = result
+                    if replay_key is not None and request_hash is not None:
+                        with self._idempotency_lock:
+                            self._executed[replay_key] = (request_hash, result)
                     self._dry_run_previews.discard(preview_key)
                     if approval is not None and definition.mode is ToolMode.EXTERNAL_ACTION:
                         self._approval_policy.consume(approval)
@@ -191,6 +234,32 @@ class ToolGateway:
             self.open_circuit(context.execution_id, f"connector exception on {tool_name}")
             return self._deny(context, request, "connector_exception", str(error))
 
+    def _replay(
+        self,
+        context: "GatewayContext",
+        request: ActionRequest,
+        idempotency_key: str,
+        prior: ActionResult,
+    ) -> ActionResult:
+        self._audit.append(
+            event_type="gateway_replay",
+            business_id=context.business_id,
+            execution_id=context.execution_id,
+            task_id=context.task_id,
+            agent_id=context.agent_id,
+            tool=request.tool,
+            approval_id=context.approval_id,
+            external_operation_id=prior.external_operation_id,
+            detail={"idempotencyKey": idempotency_key, "deduplicated": True},
+        )
+        return ActionResult(
+            action_id=request.action_id,
+            status=prior.status,
+            output={**prior.output, "deduplicated": True},
+            error=prior.error,
+            external_operation_id=prior.external_operation_id,
+        )
+
     def _invoke(self, context: "GatewayContext", request: ActionRequest, definition: EnactorToolDefinition,
                 dry_run: bool) -> ActionResult:
         account = next((acc for acc in self._accounts.values() if request.tool in acc.allowed_tools), None)
@@ -199,7 +268,7 @@ class ToolGateway:
         handler = self._handlers[request.tool]
         payload = dict(request.arguments)
         payload["__dryRun__"] = dry_run
-        payload["__idempotencyKey__"] = request.idempotency_key
+        payload["__idempotencyKey__"] = None if dry_run else request.idempotency_key
         output = handler(payload)
         status = str(output.get("status", "success"))
         operation_id = output.get("externalOperationId")

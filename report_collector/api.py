@@ -4,6 +4,7 @@ from dataclasses import asdict
 import json
 from typing import Callable
 
+from .models import ComponentRecord
 from .service import ReportCollectorService
 
 
@@ -16,19 +17,28 @@ class ReportCollectorApi:
         path = str(environ.get("PATH_INFO", ""))
         try:
             if method == "GET" and path == "/report-collector/health":
-                return self._respond(start_response, "200 OK", self._service.health())
+                health = self._service.health()
+                return self._respond(
+                    start_response,
+                    "200 OK" if health["ready"] else "503 Service Unavailable",
+                    health,
+                )
+            if method == "GET" and path == "/report-collector/system-health":
+                return self._respond(
+                    start_response,
+                    "200 OK",
+                    asdict(self._service.collect_system_health()),
+                )
             if method == "POST" and path == "/report-collector/discover":
                 length = int(environ.get("CONTENT_LENGTH") or 0)
                 body = json.loads(environ["wsgi.input"].read(length) or b"{}")
                 components = body.get("components", [])
-                snapshot = self._service.discover(tuple({
-                    (item["name"], item["category"], item["status"], item["owner"], item.get("details", ""))
-                    for item in components
-                }))
-                # tuple of dicts is not directly convertible; rebuild using model shape
-                records = []
+                if not isinstance(components, list):
+                    raise ValueError("components must be a list.")
+                records: list[ComponentRecord] = []
                 for item in components:
-                    from .models import ComponentRecord
+                    if not isinstance(item, dict):
+                        raise ValueError("Each component must be an object.")
                     records.append(ComponentRecord(
                         name=item["name"],
                         category=item["category"],

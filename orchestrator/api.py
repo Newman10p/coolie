@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Callable
 
+from reliability import SystemPausedError
+
 from research_room.models import Money
 
 from .models import DecisionCode, OwnerObjective, ShariaStatus
@@ -18,20 +20,27 @@ class OrchestratorApi:
         path = str(environ.get("PATH_INFO", ""))
 
         if method == "GET" and path == "/orchestrator/health":
-            return self._respond(start_response, "200 OK", {"status": "ok", "sector": "orchestrator"})
+            health = self._service.health()
+            status = "503 Service Unavailable" if not health["ready"] else "200 OK"
+            return self._respond(start_response, status, health)
 
         if method == "POST" and path == "/orchestrator/decision":
-            payload = self._read_json(environ)
-            objective = self._objective_from_payload(payload)
-            decision = self._service.decide(
-                objective,
-                sharia_status=ShariaStatus(str(payload["sharia_status"])),
-                evidence_confidence=float(payload["evidence_confidence"]),
-                budget_approved=bool(payload.get("budget_approved", False)),
-                operational_risk=str(payload.get("operational_risk", "low")),
-                approved_actions=tuple(str(item) for item in payload.get("approved_actions", ("monitor",)))
-            )
-            return self._respond(start_response, "200 OK", {"decision": decision.code.value, "summary": decision.summary})
+            try:
+                payload = self._read_json(environ)
+                objective = self._objective_from_payload(payload)
+                decision = self._service.decide(
+                    objective,
+                    sharia_status=ShariaStatus(str(payload["sharia_status"])),
+                    evidence_confidence=float(payload["evidence_confidence"]),
+                    budget_approved=bool(payload.get("budget_approved", False)),
+                    operational_risk=str(payload.get("operational_risk", "low")),
+                    approved_actions=tuple(str(item) for item in payload.get("approved_actions", ("monitor",)))
+                )
+                return self._respond(start_response, "200 OK", {"decision": decision.code.value, "summary": decision.summary})
+            except SystemPausedError as error:
+                return self._respond(start_response, "503 Service Unavailable", {"error": str(error)})
+            except (KeyError, TypeError, ValueError) as error:
+                return self._respond(start_response, "400 Bad Request", {"error": str(error)})
 
         return self._respond(start_response, "404 Not Found", {"error": "not found"})
 

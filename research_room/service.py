@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from reliability import ReliabilityRuntime, default_reliability_runtime
+
 from .agents import AgentRegistry
 from .controller import ResearchRoomController
 from .models import MissionStatus, ResearchMission, ResearchTask, TaskStatus
@@ -13,17 +15,29 @@ from .repositories import MissionRepository, OpportunityRepository, TaskReposito
 
 
 class ResearchRoomService:
-    def __init__(self, missions: MissionRepository, tasks: TaskRepository, opportunities: OpportunityRepository, controller: ResearchRoomController, planner: MissionPlanner, agents: AgentRegistry, reports: ReportGenerator) -> None:
+    def __init__(self, missions: MissionRepository, tasks: TaskRepository, opportunities: OpportunityRepository, controller: ResearchRoomController, planner: MissionPlanner, agents: AgentRegistry, reports: ReportGenerator, *, reliability: ReliabilityRuntime | None = None) -> None:
         self.missions = missions; self.tasks = tasks; self.opportunities = opportunities
         self.controller = controller; self.planner = planner; self.agents = agents; self.reports = reports
+        self.reliability = reliability or default_reliability_runtime()
+
+    def health(self) -> dict[str, object]:
+        paused = self.reliability.failsafe.paused
+        return {
+            "service": "research-room",
+            "status": "paused" if paused else "ok",
+            "ready": not paused,
+            "reason": self.reliability.failsafe.reason,
+        }
 
     def create_mission(self, mission: ResearchMission, actor_id: str) -> ResearchMission:
+        self.reliability.ensure_work_allowed("research mission creation")
         self.missions.create(mission)
         self.controller.transition(mission, MissionStatus.VALIDATING, actor_id=actor_id, reason="Mission intake validation")
         self.controller.transition(mission, MissionStatus.PLANNING, actor_id=actor_id, reason="Mission scope validated")
         return mission
 
     def plan_mission(self, mission_id: str, actor_id: str) -> tuple[ResearchTask, ...]:
+        self.reliability.ensure_work_allowed("research mission planning")
         mission = self.missions.get(mission_id)
         planned = self.planner.plan(mission)
         for task in planned: self.tasks.create(task)
@@ -56,6 +70,7 @@ class ResearchRoomService:
         return self.controller.progress(self.missions.get(mission_id), list(self.tasks.for_mission(mission_id)))
 
     def run_ready_tasks(self, mission_id: str) -> tuple[ResearchTask, ...]:
+        self.reliability.ensure_work_allowed("research task execution")
         mission = self.missions.get(mission_id); all_tasks = list(self.tasks.for_mission(mission_id))
         ready = self.controller.ready_tasks(mission, all_tasks)
         for task in ready:

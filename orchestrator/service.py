@@ -2,16 +2,33 @@ from __future__ import annotations
 
 from typing import Any
 
+from reliability import ReliabilityRuntime, default_reliability_runtime
+
 from .controller import OrchestratorController
 from .models import DecisionCode, EnactorMandate, OrchestratorDecision, OwnerObjective, ShariaStatus
 
 
 class OrchestratorService:
-    def __init__(self, controller: OrchestratorController | None = None) -> None:
+    def __init__(
+        self,
+        controller: OrchestratorController | None = None,
+        *,
+        reliability: ReliabilityRuntime | None = None,
+    ) -> None:
         self.controller = controller or OrchestratorController()
+        self.reliability = reliability or default_reliability_runtime()
 
     def create_objective(self, objective: OwnerObjective) -> OwnerObjective:
         return objective
+
+    def health(self) -> dict[str, object]:
+        paused = self.reliability.failsafe.paused
+        return {
+            "service": "orchestrator",
+            "status": "paused" if paused else "ok",
+            "ready": not paused,
+            "reason": self.reliability.failsafe.reason,
+        }
 
     def decide(
         self,
@@ -23,6 +40,7 @@ class OrchestratorService:
         operational_risk: str,
         approved_actions: tuple[str, ...] | None = None,
     ) -> OrchestratorDecision:
+        self.reliability.ensure_work_allowed("business decision")
         review = self.controller.review_objective(
             objective,
             sharia_status=sharia_status,
@@ -43,6 +61,7 @@ class OrchestratorService:
         operational_risk: str,
         approved_actions: tuple[str, ...] | None = None,
     ) -> EnactorMandate:
+        self.reliability.ensure_work_allowed("mandate issuance")
         review = self.controller.review_objective(
             objective,
             sharia_status=sharia_status,

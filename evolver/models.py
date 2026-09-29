@@ -39,6 +39,12 @@ class ExpansionRequest:
             raise ValueError("expected_monthly_revenue must be a Money value when provided.")
         if self.max_budget is not None and not isinstance(self.max_budget, Money):
             raise ValueError("max_budget must be a Money value when provided.")
+        if (
+            self.max_budget is not None
+            and self.expected_monthly_revenue is not None
+            and self.max_budget.currency != self.expected_monthly_revenue.currency
+        ):
+            raise ValueError("max_budget and expected_monthly_revenue must use the same currency.")
         if self.risk_tolerance not in {"low", "medium", "high"}:
             raise ValueError("risk_tolerance must be low, medium, or high.")
         if self.created_at.tzinfo is None:

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from research_room.models import Money
 from research_room.models import ResearchMission, ResearchTask
+from money_calculator import ActivationProposal, MoneyCalculatorService
 
 from brain import (
     AgentDefinition,
@@ -132,6 +133,23 @@ class BrainFixture(unittest.TestCase):
         }
         values.update(overrides)
         return InferenceRequest(**values)
+
+    def test_emergency_stop_pauses_other_sectors_through_shared_reliability_runtime(self):
+        runtime = self.service.reliability
+        try:
+            self.service.emergency_stop("operator safety stop", authority="owner-1")
+            self.assertTrue(runtime.failsafe.paused)
+            with self.assertRaises(PermissionError):
+                MoneyCalculatorService().assess(
+                    ActivationProposal(
+                        "ACT-BRAIN-STOP", "test", "owner",
+                        Money(100, "USD"), Money(150, "USD"), 10, 0.9,
+                    )
+                )
+        finally:
+            if runtime.failsafe.paused:
+                self.service.restart(authority="owner-1")
+        self.assertFalse(runtime.failsafe.paused)
 
 
 class BrainInferenceTests(BrainFixture):

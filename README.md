@@ -93,3 +93,27 @@ The implementation adds:
 - snapshot generation with health ratios and alert counts;
 - directory-based discovery of Python modules and their current status;
 - a small API surface for health and discovery operations.
+
+## Shared reliability and failsafe
+
+All sector services and the Enactor tool gateway use the same process-wide `ReliabilityRuntime` by default. Applications can inject a fresh runtime for isolation, or compose all seven sector services through [coolie_runtime.py](./coolie_runtime.py), which requires explicit startup checks, binds the shared emergency pause, and registers service heartbeats. When the pause is active, Brain inference, research execution, business decisions, finance assessments, capability planning, and Enactor execution fail closed. Report collection and read-only health inspection remain available.
+
+The reliability package provides liveness/startup/readiness/dependency probes, heartbeat staleness and progress assessment, incident records, structured event records with sensitive-field redaction, and an authenticated WSGI pause/resume interface. Operator control is unavailable unless the application supplies an authentication callback. The Report Collector can build snapshots from registered sector health.
+
+This is a local reliability foundation, not production durability: heartbeats, incidents, logs, workflow state, and Enactor idempotency records are currently in memory. The repository does not yet have a durable queue/event store, database-backed ledger or reconciliation worker, service supervisors, distributed leases, telemetry exporter, or deployment-level graceful-shutdown integration. Those adapters and staging failure/soak tests are required before enabling production external actions. Run local tests with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Owner workroom UI
+
+The dependency-free, responsive owner interface is in [`ui/`](./ui/). Its navy-and-blue workroom theme follows the UI brief's blue, gold, and metallic plate tokens. The global Orchestrator drawer includes push-to-talk audio capture, a visible transcript, always-available text input, and opt-in speech output. Audio is uploaded only after recording stops and only to a configured owner BFF; local preview recordings are discarded. A real integration must implement `POST /api/orchestrator/transcribe` and `POST /api/orchestrator/messages`; voice recognition never authorizes or executes actions. Run the local sample server from the repository root:
+
+```bash
+python -m ui.demo_server
+```
+
+Then open `http://localhost:4173`. This server supplies sample owner read models at `/api/ui/briefing`, `/api/ui/office-table`, and `/api/ui/reports` so the connected UI can be exercised. All responses are marked as sample data and the interface labels them as such; none are connected to business, wallet, approval, or sector state. The sample server does not provide real readiness checks, Orchestrator messaging, speech transcription, or emergency pause/resume. It is a UI development fixture, not a backend for operating Coolie.
+
+To connect a real owner BFF, configure its same-origin API base path (for example, `/api`) in Settings. The BFF must expose those three owner read models plus authenticated reliability routes under that prefix. The repository does not yet implement production owner aggregation. Missing live data is shown as unavailable rather than replaced with preview values.

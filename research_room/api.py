@@ -5,6 +5,8 @@ from dataclasses import asdict
 import json
 from typing import Callable
 
+from reliability import SystemPausedError
+
 from .models import Money, ResearchMission
 from .service import ResearchRoomService
 
@@ -14,6 +16,13 @@ class ResearchRoomApi:
     def __call__(self, environ: dict[str, object], start_response: Callable) -> list[bytes]:
         method, path = environ["REQUEST_METHOD"], environ["PATH_INFO"]
         try:
+            if method == "GET" and path == "/research/health":
+                health = self._service.health()
+                return self._respond(
+                    start_response,
+                    "503 Service Unavailable" if not health["ready"] else "200 OK",
+                    health,
+                )
             if method == "POST" and path == "/research-missions":
                 length = int(environ.get("CONTENT_LENGTH") or 0); body = json.loads(environ["wsgi.input"].read(length) or b"{}")
                 capital = body.get("capital_limit")
@@ -33,6 +42,8 @@ class ResearchRoomApi:
                     return self._respond(start_response, "200 OK", asdict(self._service.progress(mission_id)))
                 return self._respond(start_response, "200 OK", asdict(self._service.missions.get(mission_id)))
             return self._respond(start_response, "404 Not Found", {"error": "not found"})
+        except SystemPausedError as error:
+            return self._respond(start_response, "503 Service Unavailable", {"error": str(error)})
         except (KeyError, ValueError) as error:
             return self._respond(start_response, "400 Bad Request", {"error": str(error)})
     @staticmethod

@@ -37,6 +37,8 @@ class MoneyCalculatorController:
         roi = proposal.projected_roi
         margin = proposal.projected_margin
         payback_days = max(0, int(proposal.time_horizon_days))
+        if budget_limit is not None and budget_limit.currency != proposal.planned_spend.currency:
+            raise ValueError("budget_limit and planned_spend must use the same currency.")
 
         if proposal.confidence < 0.6:
             reason = "Confidence is below the minimum threshold for a real activation spend."

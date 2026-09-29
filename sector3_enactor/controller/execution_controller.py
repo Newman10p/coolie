@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from uuid import uuid4
 
+from reliability import ReliabilityRuntime, default_reliability_runtime
+
 from ..agents.analytics.metric_collector import MetricCollectorAgent
 from ..agents.builders.web_developer import WebDeveloperAgent
 from ..agents.commerce.catalog_manager import CatalogManagerAgent
@@ -76,7 +78,7 @@ def _plan_payload(plan: ExecutionPlan) -> dict[str, Any]:
 class ExecutionController:
     def __init__(self, *, config: SectorConfig, registry: ToolRegistry, store: Storefront | None = None,
                  artifacts: ArtifactStore | None = None, audit: AuditRepository | None = None,
-                 gateway: ToolGateway | None = None) -> None:
+                 gateway: ToolGateway | None = None, reliability: ReliabilityRuntime | None = None) -> None:
         self.config = config
         self.registry = registry
         self.store = store or Storefront()
@@ -87,10 +89,16 @@ class ExecutionController:
         self.approval_policy = ApprovalPolicy(config, self.store.approvals, self.audit)
         self.state_machine = ExecutionStateMachine(self.audit)
         self.quality_gate = QualityGate()
+        if reliability is not None and gateway is not None and gateway.reliability is not reliability:
+            raise ValueError("ExecutionController and ToolGateway must share one ReliabilityRuntime.")
+        self.reliability = reliability or (
+            gateway.reliability if gateway is not None else default_reliability_runtime()
+        )
         self.gateway = gateway or ToolGateway(registry=registry, authorizer=self.authorizer,
                                               approvals=self.store.approvals, approval_policy=self.approval_policy,
                                               audit=self.audit, budgets=self.budgets,
-                                              rate_limit_per_minute=config.rate_limits.get("default_calls_per_minute", 60))
+                                              rate_limit_per_minute=config.rate_limits.get("default_calls_per_minute", 60),
+                                              reliability=self.reliability)
         self._plan_registry: dict[str, ExecutionPlan] = {}   # plan_hash → immutable compiled plan (§8.1 rule 3)
         self.research_sink: list[dict[str, Any]] = []       # fake Research Room peer queue
         self.orchestrator_sink: list[dict[str, Any]] = []   # fake Orchestrator queue
@@ -142,6 +150,7 @@ class ExecutionController:
 
     # -- main run loop (§10 steps 1–11) ------------------------------------------
     def submit(self, request: ExecutionRequest, plan: ExecutionPlan, context: dict[str, Any]) -> RunOutcome:
+        self.reliability.ensure_work_allowed("Enactor execution")
         self.store.executions.put(request)
         self.state_machine.transition(request, ExecutionStatus.VALIDATING, event="received")
         validation = validate_request(request)
@@ -249,6 +258,7 @@ class ExecutionController:
 
     def resume(self, request: ExecutionRequest, plan: ExecutionPlan, context: dict[str, Any]) -> RunOutcome:
         """Re-run after approvals land: waiting/blocked tasks get another attempt (§10 step 4)."""
+        self.reliability.ensure_work_allowed("Enactor execution resume")
         if request.status is ExecutionStatus.AWAITING_APPROVAL:
             self.state_machine.transition(request, ExecutionStatus.EXECUTING, event="approvals_updated")
         for task in plan.tasks:

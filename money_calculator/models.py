@@ -45,6 +45,8 @@ class ActivationProposal:
             raise ValueError("expected_revenue must be a Money value.")
         if self.expected_revenue.amount < 0:
             raise ValueError("expected_revenue cannot be negative.")
+        if self.expected_revenue.currency != self.planned_spend.currency:
+            raise ValueError("planned_spend and expected_revenue must use the same currency.")
         if isinstance(self.time_horizon_days, bool) or not isinstance(self.time_horizon_days, int) or self.time_horizon_days <= 0:
             raise ValueError("time_horizon_days must be a positive integer.")
         _probability(self.confidence, "confidence")

@@ -50,10 +50,14 @@ class ApprovalRepository(_EntityStore):
 
     def put(self, item: ApprovalRequest) -> None:
         existing = self.maybe(item.approval_id)
-        if isinstance(existing, ApprovalRequest) and existing.status is ApprovalStatus.APPROVED and item.status is not existing.status and existing.status is item.status:
-            raise ValueError("Approved decisions are immutable.")
-        if isinstance(existing, ApprovalRequest) and existing.status in {ApprovalStatus.APPROVED, ApprovalStatus.DENIED} and item.status is not existing.status:
-            raise ValueError("Decided approvals cannot be re-decided.")
+        if isinstance(existing, ApprovalRequest):
+            if existing.status is ApprovalStatus.APPROVED and item.status not in {
+                ApprovalStatus.APPROVED,
+                ApprovalStatus.CONSUMED,
+            }:
+                raise ValueError("Approved decisions are immutable except for single-use consumption.")
+            if existing.status in {ApprovalStatus.DENIED, ApprovalStatus.CONSUMED} and item.status is not existing.status:
+                raise ValueError("Denied and consumed approvals cannot be changed.")
         super().put(item)
 
     def for_execution(self, execution_id: str) -> tuple[ApprovalRequest, ...]:
