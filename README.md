@@ -39,3 +39,57 @@ External connectors and real-world Enactor actions are deliberately not implemen
 ## Delivered workflow capabilities
 
 The Research Room now plans product/service research tasks, runs registered narrow agents through a controller-owned read-only connector gateway, captures immutable source artifacts, sanitizes untrusted source text, extracts basic public facts, registers and verifies evidence, generates immutable reports, retains outcome learning records, and exposes a small WSGI mission API (create, get, pause, resume, cancel, progress). External provider adapters remain deployment concerns: no connector in this package can spend, publish, purchase, message customers, or call the Enactor.
+
+## Sector 0: The Brain
+
+The Brain is the provider-neutral intelligence and governance plane described in the supplied Coolie architecture DOCX. Its six-stage minimum viable foundation is implemented in the standard-library `brain` package:
+
+- Provider adapters receive expiring credentials only through the Brain gateway and must translate provider exceptions to sanitized `ProviderError`s. `EnvironmentSecretManager` is a development adapter; production should inject a managed secret-store implementation.
+- Registered agents receive expiring, revocable, task-scoped session tokens with operation, memory, token, and cost limits. Model profiles are routed by capability, sector, and registered agent permissions.
+- Inference applies per-request authorization, estimated cost preflight plus provider-reported usage accounting, context-reference and sensitivity filtering, a common JSON-Schema subset validator, secret-leak rejection, and content-hash audit records. If a provider reports usage above a request's reserved ceiling, the overrun is recorded and the output is blocked; charges already incurred at the provider cannot be undone.
+- Memory namespaces, bounded approval-aware delegation, and an append-only in-process event bus with retryable subscriber delivery provide isolated coordination primitives.
+- Provider health, fallback profiles, circuit breakers, and an explicit emergency pause support degraded operation.
+
+There is no provider key, live provider adapter, persistent Brain database, or production secret-store integration in this repository. Those are deployment-provided interfaces, not silently configured defaults. `BrainResearchAgent` can be registered with the Research Room's existing agent registry to route a research task through an explicitly configured Brain; its session-issuer and revoker callbacks must be supplied by trusted orchestration code and issue only the scopes needed for that task. The WSGI boundary exposes authenticated `POST /brain/inference` and unauthenticated `GET /brain/health`; only the session token is accepted from callers, never a provider credential. Memory search is lexical and in-process, not embedding/vector search; delegation reserves its full declared cap against the parent task; persistence, full JSON Schema, provider-specific adapters, and managed event delivery remain deployment work.
+
+For local development, configure a provider adapter, model profiles, agent policies, and `EnvironmentSecretManager` explicitly in application composition. Run the standard-library test suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Sector 4: Business Finance / Money Calculator / Activation Manager
+
+The actual Sector 4 layer in the architecture is the business-finance and activation plane: it evaluates planned spend, expected revenue, margin, risk, and confidence before a real activation is approved. This package complements the earlier governance-oriented Orchestrator and keeps the business decision logic explicitly separate from the policy-enforcement layer.
+
+The first implementation adds:
+
+- typed activation proposals with predicted revenue, margin, and confidence gates;
+- spend approval logic that rejects unprofitable or weak-evidence activations;
+- budget-cap checks and owner-approval requests before exceeding a signed limit;
+- a deterministic finance recommendation record with ROI and payback insights;
+- a small WSGI boundary for assessment requests and decision records.
+
+This sector remains bounded by design: it can recommend or gate spending, but it does not bypass policy, Sharia, operational risk, or owner approval gates. Those controls remain enforced by the governance stack around it.
+
+## Sector 5: The Evolver
+
+The Evolver is the controlled capability-expansion layer described in the updated Word architecture. It evaluates a proposed new business domain, identifies what Coolie already supports, highlights capability gaps, estimates the required agents, tools, connectors, policies, and data models, and produces a validated extension plan for approval.
+
+The implementation adds:
+
+- expansion requests and capability-gap models;
+- a controller that maps missing capabilities to required build components;
+- cost and revenue viability checks for the proposed extension;
+- a plan object that captures required assets, testing steps, and reusability guidance.
+
+## Sector 6: The Report Collector
+
+The Report Collector gathers the current operational picture from the live system and produces an operational snapshot that can be handed to the Orchestrator for presentation through the UI. It is designed to auto-discover system components and present a coherent health summary without directly changing policy or state.
+
+The implementation adds:
+
+- system component records with status and ownership metadata;
+- snapshot generation with health ratios and alert counts;
+- directory-based discovery of Python modules and their current status;
+- a small API surface for health and discovery operations.

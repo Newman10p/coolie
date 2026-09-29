@@ -84,6 +84,28 @@ class Escalation:
     routed_to: str  # human | finance | orchestrator | strategy_manager
     approval_request_id: str | None = None
 
+    @property
+    def approval_id(self) -> str | None:
+        return self.approval_request_id
+
+    @approval_id.setter
+    def approval_id(self, value: str | None) -> None:
+        object.__setattr__(self, "approval_request_id", value)
+
+    def __repr__(self) -> str:
+        return (
+            "Escalation("
+            f"escalation_id={self.escalation_id!r}, "
+            f"execution_id={self.execution_id!r}, "
+            f"reason={self.reason!r}, "
+            f"severity={self.severity!r}, "
+            f"routed_to={self.routed_to!r}, "
+            f"approval_id={self.approval_request_id!r}"
+            ")"
+        )
+
+    __str__ = __repr__
+
     def __post_init__(self) -> None:
         _non_empty(self.reason, "reason"); _non_empty(self.routed_to, "routed_to")
         if self.routed_to not in {"human", "finance", "orchestrator", "strategy_manager"}:

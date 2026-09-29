@@ -26,21 +26,43 @@ class SupportTriageAgent(BaseEnactorAgent):
         try: intent = MessageIntent(intent_value)
         except ValueError: intent = MessageIntent.CUSTOMER_FEEDBACK
 
-        restricted = set(RESTRICTED_INTENTS) | {MessageIntent(value) for value in state.get("restricted_intents", ())}
+        restricted = set(RESTRICTED_INTENTS)
+        for value in state.get("restricted_intents", ()):
+            try:
+                restricted.add(MessageIntent(str(value)))
+            except ValueError:
+                continue
         if intent in restricted:
             ticket = SupportTicket(ticket_id=f"TKT-{message.message_id}", business_id=business_id,
                                   message_id=message.message_id, intent=intent, severity="high",
                                   escalation_reason=f"Restricted intent {intent.value}: human decision required.")
             state["store"].tickets.put(ticket)
-            route = self.call(task, business_id, plan_hash, "triage.route_request",
-                              {"messageId": message.message_id, "queue": "human_review", "target": message.message_id})
-            notify = self.call(task, business_id, plan_hash, "internal.notify",
-                               {"channel": "human", "message": f"Escalated {intent.value} for {message.sender_reference}",
-                                "target": "human"})
+            route_exact = {"messageId": message.message_id, "queue": "human_review", "target": message.message_id}
+            route_approval = self.request_approval(task, business_id, "triage.route_request",
+                                                  message.message_id, route_exact, ApprovalLevel.A1_INTERNAL,
+                                                  reason=f"Escalate restricted {intent.value} message to human review")
+            if not self.approval_ready(route_approval.approval_id):
+                return AgentStatus.AWAITING_APPROVAL, f"Escalated to human (restricted intent {intent.value}).", {
+                    "intent": intent.value, "escalated": True, "ticket_id": ticket.ticket_id,
+                    "approval_id": route_approval.approval_id}
+            route = self.call(task, business_id, plan_hash, "triage.route_request", route_exact,
+                              mode=ToolMode.WRITE, approval_id=route_approval.approval_id)
+            notify_exact = {"channel": "human", "message": f"Escalated {intent.value} for {message.sender_reference}",
+                            "target": "human"}
+            notify_approval = self.request_approval(task, business_id, "internal.notify", "human", notify_exact,
+                                                   ApprovalLevel.A1_INTERNAL,
+                                                   reason=f"Notify human reviewer for restricted {intent.value} message")
+            if not self.approval_ready(notify_approval.approval_id):
+                return AgentStatus.AWAITING_APPROVAL, f"Escalated to human (restricted intent {intent.value}).", {
+                    "intent": intent.value, "escalated": True, "ticket_id": ticket.ticket_id,
+                    "approval_id": notify_approval.approval_id}
+            notify = self.call(task, business_id, plan_hash, "internal.notify", notify_exact,
+                               mode=ToolMode.WRITE, approval_id=notify_approval.approval_id)
             if route.status != "success" or notify.status != "success":
                 return AgentStatus.FAILED, "Escalation routing denied by gateway.", {"intent": intent.value}
-            return AgentStatus.SUCCESS, f"Escalated to human (restricted intent {intent.value}).", {
-                "intent": intent.value, "escalated": True, "ticket_id": ticket.ticket_id}
+            return AgentStatus.AWAITING_APPROVAL, f"Escalated to human (restricted intent {intent.value}).", {
+                "intent": intent.value, "escalated": True, "ticket_id": ticket.ticket_id,
+                "approval_id": route_approval.approval_id}
 
         reply_type = str(classification.output.get("replyType", "informational"))
         body = ORDER_STATUS_TEMPLATE.format(name=message.sender_reference.split("@")[0],

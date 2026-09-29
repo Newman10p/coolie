@@ -1,4 +1,5 @@
 from .base import BaseEnactorAgent
+from .base_enactor_agent import EnactorAgent
 from .messengers.support_triage import SupportTriageAgent
 from .messengers.supply_communications import SupplyCommunicationsAgent
 from .designers.graphic_designer import GraphicDesignerAgent
