@@ -5,9 +5,10 @@ from dataclasses import dataclass
 import ipaddress
 import json
 import os
+from queue import Empty, Full, Queue
 import re
-import selectors
 import subprocess
+from threading import Event, Thread
 import time
 from typing import Any
 from urllib.parse import urlsplit
@@ -48,7 +49,9 @@ class MCPStdioSession:
         self.config = config
         self.timeout_seconds = timeout_seconds
         self._process: subprocess.Popen[bytes] | None = None
-        self._selector = selectors.DefaultSelector()
+        self._stdout_chunks: Queue[bytes | BaseException | None] = Queue(maxsize=8)
+        self._reader_stop = Event()
+        self._reader_thread: Thread | None = None
         self._buffer = bytearray()
         self._messages: list[dict[str, Any]] = []
         self._next_id = 1
@@ -66,10 +69,15 @@ class MCPStdioSession:
                 bufsize=0,
             )
         except OSError as error:
-            self._selector.close()
             raise MCPError(f"Could not start configured MCP server {self.config.name!r}.") from error
         assert self._process.stdout is not None
-        self._selector.register(self._process.stdout, selectors.EVENT_READ)
+        self._reader_thread = Thread(
+            target=self._read_stdout,
+            args=(self._process.stdout,),
+            name=f"coolie-mcp-{self.config.name}",
+            daemon=True,
+        )
+        self._reader_thread.start()
         try:
             initialized = self._request("initialize", {
                 "protocolVersion": "2024-11-05",
@@ -89,7 +97,7 @@ class MCPStdioSession:
 
     def close(self) -> None:
         process, self._process = self._process, None
-        self._selector.close()
+        self._reader_stop.set()
         if process is None:
             return
         if process.stdin is not None:
@@ -106,6 +114,31 @@ class MCPStdioSession:
                 process.wait()
         if process.stdout is not None:
             process.stdout.close()
+        if self._reader_thread is not None:
+            self._reader_thread.join(timeout=1)
+            self._reader_thread = None
+
+    def _read_stdout(self, stream) -> None:
+        try:
+            while not self._reader_stop.is_set():
+                chunk = stream.read(65536)
+                if not chunk:
+                    self._queue_stdout(None)
+                    return
+                if not self._queue_stdout(chunk):
+                    return
+        except OSError as error:
+            if not self._reader_stop.is_set():
+                self._queue_stdout(error)
+
+    def _queue_stdout(self, value: bytes | BaseException | None) -> bool:
+        while not self._reader_stop.is_set():
+            try:
+                self._stdout_chunks.put(value, timeout=0.1)
+                return True
+            except Full:
+                continue
+        return False
 
     def list_tools(self) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
@@ -187,18 +220,16 @@ class MCPStdioSession:
                 break
             if len(self._buffer) > self._MAX_MESSAGE_BYTES:
                 raise MCPError(f"MCP server {self.config.name!r} exceeded the message-size limit.")
-            process = self._process
-            if process is None or process.poll() is not None:
-                raise MCPError(f"MCP server {self.config.name!r} exited before replying.")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MCPError(f"MCP server {self.config.name!r} timed out.")
-            ready = self._selector.select(remaining)
-            if not ready:
+            try:
+                chunk = self._stdout_chunks.get(timeout=remaining)
+            except Empty:
                 raise MCPError(f"MCP server {self.config.name!r} timed out.")
-            assert process.stdout is not None
-            chunk = os.read(process.stdout.fileno(), 65536)
-            if not chunk:
+            if isinstance(chunk, BaseException):
+                raise MCPError(f"MCP server {self.config.name!r} could not be read.") from chunk
+            if chunk is None:
                 raise MCPError(f"MCP server {self.config.name!r} closed its response stream.")
             self._buffer.extend(chunk)
         return self._messages.pop(0)
