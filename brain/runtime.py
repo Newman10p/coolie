@@ -135,6 +135,7 @@ class BrainService:
         circuit_reset_seconds: float = 30,
         delegations: DelegationManager | None = None,
         reliability: ReliabilityRuntime | None = None,
+        persistence=None,
     ) -> None:
         self._agents = agents
         self._sessions = sessions
@@ -162,9 +163,61 @@ class BrainService:
         }
         self._lock = RLock()
         self._request_ids: set[str] = set()
+        self._persistence = persistence
+        if persistence is not None:
+            self._audits.extend(persistence.events("brain_audits", InferenceAudit))
+            self._usage.extend(persistence.events("brain_usage", UsageRecord))
+            self._request_ids.update(persistence.record_ids("brain_request_ids"))
+            self._delegation_reservations.update(
+                {
+                    delegation_id: persistence.get_payload(
+                        "brain_delegation_reservations", delegation_id
+                    )["reservation_id"]
+                    for delegation_id in persistence.record_ids(
+                        "brain_delegation_reservations"
+                    )
+                }
+            )
 
     def agent_definition(self, agent_id: str) -> AgentDefinition:
         return self._agents.get(agent_id)
+
+    def bind_persistence(self, persistence, *, budgets) -> None:
+        """Bind durable state before this Brain instance begins processing work."""
+        if (
+            self._audits
+            or self._usage
+            or self._request_ids
+            or self._memory._records
+            or self._events.events()
+            or self._delegations._records
+            or self._budgets._reservations
+            or self._budgets._reserved
+            or self._budgets._spent
+        ):
+            raise RuntimeError(
+                "Supabase persistence must be bound before Brain has stored runtime state."
+            )
+        self._persistence = persistence
+        self._memory = MemoryStore(persistence)
+        self._context = ContextBuilder(self._memory)
+        self._events = EventBus(persistence)
+        self._budgets = budgets
+        self._delegations = DelegationManager(
+            maximum_children=self._delegations._maximum_children,
+            persistence=persistence,
+        )
+        self._audits = list(persistence.events("brain_audits", InferenceAudit))
+        self._usage = list(persistence.events("brain_usage", UsageRecord))
+        self._request_ids = set(persistence.record_ids("brain_request_ids"))
+        self._delegation_reservations = {
+            delegation_id: persistence.get_payload(
+                "brain_delegation_reservations", delegation_id
+            )["reservation_id"]
+            for delegation_id in persistence.record_ids(
+                "brain_delegation_reservations"
+            )
+        }
 
     def event_log(self) -> tuple[BrainEvent, ...]:
         return self._events.events()
@@ -277,6 +330,12 @@ class BrainService:
             self._budgets.release_if_active(reservation.reservation_id)
             raise
         self._delegation_reservations[delegation.delegation_id] = reservation.reservation_id
+        if self._persistence is not None:
+            self._persistence.put_record(
+                "brain_delegation_reservations",
+                delegation.delegation_id,
+                {"reservation_id": reservation.reservation_id},
+            )
         self._events.publish(
             "brain.delegation.created", source="brain",
             payload={"delegation_id": delegation.delegation_id, "agent_id": parent.agent_id, "status": delegation.status},
@@ -289,6 +348,10 @@ class BrainService:
         reservation_id = self._delegation_reservations.pop(delegation_id, None)
         if reservation_id is not None:
             self._budgets.release_if_active(reservation_id)
+            if self._persistence is not None:
+                self._persistence.delete_record(
+                    "brain_delegation_reservations", delegation_id
+                )
         self._events.publish(
             "brain.delegation.cancelled", source="brain",
             payload={"delegation_id": delegation_id},
@@ -334,6 +397,10 @@ class BrainService:
         if reservation_id is not None:
             parent = self._agents.get(delegation.parent_agent_id)
             self._budgets.commit(reservation_id, delegation.budget, limit=parent.max_cost_per_task)
+            if self._persistence is not None:
+                self._persistence.delete_record(
+                    "brain_delegation_reservations", delegation_id
+                )
         self._events.publish(
             "brain.delegation.completed", source="brain",
             payload={"delegation_id": delegation_id, "target_agent_id": target_agent_id},
@@ -401,6 +468,23 @@ class BrainService:
             if request.request_id in self._request_ids:
                 self._audit(request, request_hash, None, "blocked", "duplicate_request_id", profiles[0].profile_id)
                 raise ValueError("request_id has already been used.")
+            if self._persistence is not None:
+                try:
+                    self._persistence.insert_record(
+                        "brain_request_ids",
+                        request.request_id,
+                        {"request_id": request.request_id},
+                    )
+                except ValueError:
+                    self._audit(
+                        request,
+                        request_hash,
+                        None,
+                        "blocked",
+                        "duplicate_request_id",
+                        profiles[0].profile_id,
+                    )
+                    raise ValueError("request_id has already been used.") from None
             self._request_ids.add(request.request_id)
         try:
             reservation = self._budgets.reserve(
@@ -535,7 +619,7 @@ class BrainService:
             request.request_id, agent.agent_id, agent.sector, request.task_id, profile.provider_id,
             profile.profile_id, provider_response.input_tokens, provider_response.output_tokens, cost,
         )
-        self._usage.append(usage)
+        self._record_usage(usage)
         try:
             task_limit = Money(
                 min(agent.max_cost_per_task.amount, session.cost_limit.amount),
@@ -620,7 +704,19 @@ class BrainService:
         )
         with self._lock:
             self._audits.append(audit)
+            if self._persistence is not None:
+                self._persistence.append_event(
+                    "brain_audits", request.request_id, audit.audit_id, audit
+                )
         return audit
+
+    def _record_usage(self, usage: UsageRecord) -> None:
+        with self._lock:
+            if self._persistence is not None:
+                self._persistence.append_event(
+                    "brain_usage", usage.request_id, usage.request_id, usage
+                )
+            self._usage.append(usage)
 
     def write_memory(self, record: MemoryRecord, *, session_id: str, session_token: str) -> MemoryRecord:
         session = self._sessions.validate(session_id, session_token)

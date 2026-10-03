@@ -8,12 +8,13 @@ from .models import AgentDefinition, BrainOperation, Delegation, DelegationReque
 
 
 class DelegationManager:
-    def __init__(self, *, maximum_children: int = 8) -> None:
+    def __init__(self, *, maximum_children: int = 8, persistence=None) -> None:
         if isinstance(maximum_children, bool) or not isinstance(maximum_children, int) or maximum_children <= 0:
             raise ValueError("maximum_children must be a positive integer.")
         self._maximum_children = maximum_children
         self._records: dict[str, Delegation] = {}
         self._children: dict[str, int] = {}
+        self._persistence = persistence
 
     def create(self, parent: AgentDefinition, request: DelegationRequest, *, parent_depth: int = 0) -> Delegation:
         if request.requesting_agent_id != parent.agent_id:
@@ -32,9 +33,18 @@ class DelegationManager:
             raise PermissionError("Delegation budget exceeds the agent policy.")
         if not request.task.strip() or not request.expected_schema.strip():
             raise ValueError("Delegation task and expected schema are required.")
-        if request.delegation_id in self._records:
+        if self._exists(request.delegation_id):
             raise ValueError(f"Delegation already exists: {request.delegation_id}")
-        children = self._children.get(parent.agent_id, 0)
+        if self._persistence is None:
+            children = self._children.get(parent.agent_id, 0)
+        else:
+            children = sum(
+                record.parent_agent_id == parent.agent_id
+                and record.status in {"awaiting_approval", "approved"}
+                for record in self._persistence.all_records(
+                    "brain_delegations", Delegation
+                )
+            )
         if children >= self._maximum_children:
             raise PermissionError("Maximum concurrent delegation count reached.")
         delegation = Delegation(
@@ -44,8 +54,9 @@ class DelegationManager:
             "awaiting_approval" if request.approval_required or parent.requires_approval_for_delegation else "approved",
             request.approval_required or parent.requires_approval_for_delegation,
         )
-        self._records[delegation.delegation_id] = delegation
-        self._children[parent.agent_id] = children + 1
+        self._save(delegation, create=True)
+        if self._persistence is None:
+            self._children[parent.agent_id] = children + 1
         return delegation
 
     def approve(self, delegation_id: str, *, authority: str) -> Delegation:
@@ -59,7 +70,7 @@ class DelegationManager:
             delegation.task, delegation.context_refs, delegation.budget, delegation.deadline,
             delegation.depth, delegation.expected_schema, "approved", delegation.approval_required,
         )
-        self._records[delegation_id] = approved
+        self._save(approved)
         return approved
 
     def complete(self, delegation_id: str, *, target_agent_type: str, result: object) -> Delegation:
@@ -75,8 +86,11 @@ class DelegationManager:
             delegation.task, delegation.context_refs, delegation.budget, delegation.deadline,
             delegation.depth, delegation.expected_schema, "completed", delegation.approval_required, deepcopy(result),
         )
-        self._records[delegation_id] = completed
-        self._children[delegation.parent_agent_id] = max(0, self._children.get(delegation.parent_agent_id, 1) - 1)
+        self._save(completed)
+        if self._persistence is None:
+            self._children[delegation.parent_agent_id] = max(
+                0, self._children.get(delegation.parent_agent_id, 1) - 1
+            )
         return completed
 
     def cancel(self, delegation_id: str, *, authority: str) -> Delegation:
@@ -90,12 +104,41 @@ class DelegationManager:
             delegation.task, delegation.context_refs, delegation.budget, delegation.deadline,
             delegation.depth, delegation.expected_schema, "cancelled", delegation.approval_required,
         )
-        self._records[delegation_id] = cancelled
-        self._children[delegation.parent_agent_id] = max(0, self._children.get(delegation.parent_agent_id, 1) - 1)
+        self._save(cancelled)
+        if self._persistence is None:
+            self._children[delegation.parent_agent_id] = max(
+                0, self._children.get(delegation.parent_agent_id, 1) - 1
+            )
         return cancelled
 
     def get(self, delegation_id: str) -> Delegation:
+        if self._persistence is not None:
+            try:
+                return self._persistence.get_record(
+                    "brain_delegations", delegation_id, Delegation
+                )
+            except KeyError as error:
+                raise KeyError(f"Unknown delegation: {delegation_id}") from error
         try:
             return deepcopy(self._records[delegation_id])
         except KeyError as error:
             raise KeyError(f"Unknown delegation: {delegation_id}") from error
+
+    def _exists(self, delegation_id: str) -> bool:
+        if self._persistence is None:
+            return delegation_id in self._records
+        return self._persistence.maybe_record(
+            "brain_delegations", delegation_id, Delegation
+        ) is not None
+
+    def _save(self, delegation: Delegation, *, create: bool = False) -> None:
+        if self._persistence is None:
+            self._records[delegation.delegation_id] = delegation
+        elif create:
+            self._persistence.insert_record(
+                "brain_delegations", delegation.delegation_id, delegation
+            )
+        else:
+            self._persistence.put_record(
+                "brain_delegations", delegation.delegation_id, delegation
+            )

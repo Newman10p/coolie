@@ -16,8 +16,9 @@ class EvolverReview:
 
 
 class EvolverController:
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._history: dict[str, CapabilityExtensionPlan] = {}
+        self._persistence = persistence
 
     def assess(self, request: ExpansionRequest, *, existing_capabilities: tuple[str, ...] = ()) -> EvolverReview:
         known = tuple(sorted(set(existing_capabilities or ())))
@@ -68,7 +69,13 @@ class EvolverController:
             reusability=reusability,
             financially_viable=financially_viable,
         )
-        self._history[request.request_id] = plan
+        if self._persistence is None:
+            self._history[request.request_id] = plan
+        else:
+            self._persistence.put_record(
+                "evolver_requests", request.request_id, request
+            )
+            self._persistence.put_record("evolver_assessments", request.request_id, plan)
         return EvolverReview(request.request_id, plan)
 
     @staticmethod
@@ -82,4 +89,8 @@ class EvolverController:
         return Money(base, currency)
 
     def history(self, request_id: str) -> CapabilityExtensionPlan | None:
+        if self._persistence is not None:
+            return self._persistence.maybe_record(
+                "evolver_assessments", request_id, CapabilityExtensionPlan
+            )
         return self._history.get(request_id)

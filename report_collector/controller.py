@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import secrets
 
 from .models import ComponentRecord, OperationalSnapshot
 
@@ -15,8 +16,9 @@ class ReportCollectorReview:
 
 
 class ReportCollectorController:
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._history: dict[str, OperationalSnapshot] = {}
+        self._persistence = persistence
 
     def discover(self, components: tuple[ComponentRecord, ...] | list[ComponentRecord]) -> ReportCollectorReview:
         records = tuple(components)
@@ -31,14 +33,23 @@ class ReportCollectorController:
             "Operational snapshot is critical; immediate attention is required."
         )
         snapshot = OperationalSnapshot(
-            snapshot_id=f"snapshot-{len(self._history) + 1}",
+            snapshot_id=(
+                f"snapshot-{len(self._history) + 1}"
+                if self._persistence is None
+                else f"snapshot-{secrets.token_urlsafe(18)}"
+            ),
             components=records,
             summary=summary,
             health_ratio=health_ratio,
             alert_count=alert_count,
             orchestrator_ready=health_ratio >= 0.6,
         )
-        self._history[snapshot.snapshot_id] = snapshot
+        if self._persistence is None:
+            self._history[snapshot.snapshot_id] = snapshot
+        else:
+            self._persistence.put_record(
+                "operational_snapshots", snapshot.snapshot_id, snapshot
+            )
         return ReportCollectorReview(snapshot.snapshot_id, snapshot)
 
     def discover_from_directory(self, root: str) -> ReportCollectorReview:
@@ -60,4 +71,8 @@ class ReportCollectorController:
         return self.discover(tuple(components))
 
     def history(self, snapshot_id: str) -> OperationalSnapshot | None:
+        if self._persistence is not None:
+            return self._persistence.maybe_record(
+                "operational_snapshots", snapshot_id, OperationalSnapshot
+            )
         return self._history.get(snapshot_id)

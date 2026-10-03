@@ -110,6 +110,22 @@ class ExecutionController:
                                    scopes=frozenset({"read", "write"}))
         self.gateway.register_connector(account, tool_names, handler)
 
+    def bind_storage(self, *, store, artifacts, audit, budgets, idempotency_store) -> None:
+        """Replace in-memory state stores without discarding registered connectors."""
+        self.store = store
+        self.artifacts = artifacts
+        self.audit = audit
+        self.budgets = budgets
+        self.approval_policy = ApprovalPolicy(self.config, store.approvals, audit)
+        self.state_machine = ExecutionStateMachine(audit)
+        self.gateway.bind_persistence(
+            approvals=store.approvals,
+            approval_policy=self.approval_policy,
+            audit=audit,
+            budgets=budgets,
+            idempotency_store=idempotency_store,
+        )
+
     # -- planning (§10 step 2–3) -------------------------------------------------
     def compile_plan(self, request: ExecutionRequest, tasks: tuple[EnactorTask, ...]) -> ExecutionPlan:
         for task in tasks:

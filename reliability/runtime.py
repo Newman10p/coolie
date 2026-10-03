@@ -260,8 +260,8 @@ class HeartbeatRegistry:
 
 
 class ReliabilityRuntime:
-    def __init__(self) -> None:
-        self.failsafe = SystemFailsafe()
+    def __init__(self, *, failsafe: SystemFailsafe | None = None) -> None:
+        self.failsafe = failsafe or SystemFailsafe()
         self.heartbeats = HeartbeatRegistry()
         self._logs: list[StructuredLogRecord] = []
         self._incidents: list[Incident] = []

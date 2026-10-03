@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+node_modules/
+dist/
+/build/
+/release/
+.env
+.env.*
+!.env.example
+supabase.env
+supabase/.temp/

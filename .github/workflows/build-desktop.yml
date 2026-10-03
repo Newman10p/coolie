@@ -1,0 +1,46 @@
+name: Build Coolie desktop application
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-onefile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the owner workroom UI
+        run: |
+          npm ci
+          npm run build
+      - name: Install desktop runtime and packager
+        run: python -m pip install "pyinstaller>=6.14,<7" "psycopg[binary,pool]>=3.2,<4" "PyYAML>=6,<7"
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Package a single Windows executable
+        run: |
+          New-Item -ItemType Directory -Force -Path release, build | Out-Null
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "dist;dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Coolie-Windows
+          path: release/Coolie.exe
+          if-no-files-found: error
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/Coolie.exe
+          generate_release_notes: true

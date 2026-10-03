@@ -14,6 +14,7 @@ class Connector:
     permission: str
     source_type: str
     execute: Callable[[dict[str, Any]], dict[str, Any]]
+    source_types: tuple[str, ...] = ()
 
 
 class ConnectorRegistry:
@@ -31,6 +32,7 @@ class ToolGateway:
 
     def call(self, mission: ResearchMission, *, task_id: str, agent_id: str, tool_name: str, allowed_tools: list[str], arguments: dict[str, Any]) -> dict[str, Any]:
         connector = self._registry.get(tool_name)
-        if connector.source_type not in mission.allowed_sources.allowed_source_types: raise PermissionError("Mission source policy disallows this connector.")
+        required_sources = set(connector.source_types or (connector.source_type,))
+        if not required_sources <= mission.allowed_sources.allowed_source_types: raise PermissionError("Mission source policy disallows this connector.")
         if not self._policy.authorize(connector.permission, allowed_tools): raise PermissionError("Task is not authorized to use this connector.")
         return connector.execute(dict(arguments))

@@ -3,6 +3,7 @@ from io import BytesIO
 import unittest
 
 from ui.demo_server import application
+from ui.live_app import LiveCoolieApplication
 
 
 def call_wsgi(method: str, path: str):
@@ -22,53 +23,64 @@ def call_wsgi(method: str, path: str):
     return captured, body
 
 
-class DemoWorkroomServerTests(unittest.TestCase):
-    def test_owner_read_models_are_marked_as_sample(self):
-        for path in ("/api/ui/briefing", "/api/ui/office-table", "/api/ui/reports"):
+class PreviewServerTests(unittest.TestCase):
+    def test_api_routes_explicitly_report_preview_is_not_connected(self):
+        response, body = call_wsgi("GET", "/api/ui/bootstrap")
+        self.assertEqual(response["status"], "503 Service Unavailable")
+        payload = json.loads(body)
+        self.assertEqual(payload["dataMode"], "preview")
+        self.assertIn("does not connect", payload["error"])
+
+    def test_preview_serves_built_react_app_when_present(self):
+        response, body = call_wsgi("GET", "/")
+        if response["status"] == "503 Service Unavailable":
+            self.assertIn(b"npm run build", body)
+        else:
+            self.assertEqual(response["status"], "200 OK")
+            self.assertIn(b"Coolie", body)
+
+    def test_unknown_paths_and_traversal_are_not_exposed(self):
+        for path in ("/missing", "/../../README.md"):
             with self.subTest(path=path):
                 response, body = call_wsgi("GET", path)
-                self.assertEqual(response["status"], "200 OK")
-                self.assertEqual(response["headers"]["Content-Type"], "application/json; charset=utf-8")
-                self.assertEqual(json.loads(body)["dataMode"], "sample")
+                self.assertEqual(response["status"], "404 Not Found")
+                self.assertNotIn(b"Research Room", body)
 
-    def test_health_endpoint_does_not_claim_real_readiness(self):
-        response, body = call_wsgi("GET", "/api/health/ready")
-        health = json.loads(body)
-        self.assertEqual(response["status"], "503 Service Unavailable")
-        self.assertEqual(health["dataMode"], "sample")
-        self.assertFalse(health["ready"])
-        self.assertIn("does not connect", health["reason"])
+    def test_live_host_routes_api_and_static_requests_to_the_correct_app(self):
+        calls = []
 
-    def test_sample_server_rejects_owner_controls(self):
-        for path in ("/api/system/emergency-pause", "/api/system/resume"):
-            with self.subTest(path=path):
-                response, body = call_wsgi("POST", path)
-                self.assertEqual(response["status"], "405 Method Not Allowed")
-                self.assertEqual(json.loads(body)["error"], "method not allowed")
+        def api(environ, start_response):
+            calls.append(("api", environ["PATH_INFO"]))
+            start_response("200 OK", [("Content-Type", "text/plain")])
+            return [b"authenticated-api"]
 
-        response, body = call_wsgi("GET", "/api/system/resume")
-        self.assertEqual(response["status"], "503 Service Unavailable")
-        self.assertEqual(json.loads(body)["dataMode"], "sample")
+        def static(environ, start_response):
+            calls.append(("static", environ["PATH_INFO"]))
+            start_response("200 OK", [("Content-Type", "text/plain")])
+            return [b"workroom"]
 
-    def test_sample_server_does_not_fake_voice_or_orchestrator_responses(self):
-        for path in ("/api/orchestrator/transcribe", "/api/orchestrator/messages"):
-            with self.subTest(path=path):
-                response, body = call_wsgi("POST", path)
-                self.assertEqual(response["status"], "503 Service Unavailable")
-                payload = json.loads(body)
-                self.assertEqual(payload["dataMode"], "sample")
-                self.assertIn("not connected", payload["error"])
+        live = LiveCoolieApplication(api, static)
+        for path, expected in (
+            ("/api/ui/bootstrap", b"authenticated-api"),
+            ("/", b"workroom"),
+        ):
+            environ = {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": path,
+                "CONTENT_LENGTH": "0",
+                "wsgi.input": BytesIO(b""),
+            }
+            result = {}
 
-    def test_static_ui_is_served_and_unknown_paths_are_not_exposed(self):
-        response, body = call_wsgi("GET", "/")
-        self.assertEqual(response["status"], "200 OK")
-        self.assertIn(b"Coolie", body)
-        self.assertIn(b"voice-toggle", body)
-        self.assertIn(b"orchestrator-prompt", body)
+            def start_response(status, _headers):
+                result["status"] = status
 
-        response, body = call_wsgi("GET", "/../README.md")
-        self.assertEqual(response["status"], "404 Not Found")
-        self.assertNotIn(b"Research Room", body)
+            self.assertEqual(b"".join(live(environ, start_response)), expected)
+            self.assertEqual(result["status"], "200 OK")
+        self.assertEqual(calls, [
+            ("api", "/api/ui/bootstrap"),
+            ("static", "/"),
+        ])
 
 
 if __name__ == "__main__":

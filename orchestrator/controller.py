@@ -20,14 +20,32 @@ class ObjectiveReview:
 
 
 class OrchestratorController:
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._history: dict[str, list[OrchestratorDecision]] = {}
+        self._persistence = persistence
 
     def record(self, objective: OwnerObjective, decision: OrchestratorDecision) -> OrchestratorDecision:
-        self._history.setdefault(objective.objective_id, []).append(decision)
+        if self._persistence is None:
+            self._history.setdefault(objective.objective_id, []).append(decision)
+        else:
+            self._persistence.put_record(
+                "orchestrator_objectives", objective.objective_id, objective
+            )
+            self._persistence.append_event(
+                "orchestrator_decisions",
+                objective.objective_id,
+                decision.decision_id,
+                decision,
+            )
         return decision
 
     def history(self, objective_id: str) -> tuple[OrchestratorDecision, ...]:
+        if self._persistence is not None:
+            return self._persistence.events(
+                "orchestrator_decisions",
+                OrchestratorDecision,
+                stream_key=objective_id,
+            )
         return tuple(self._history.get(objective_id, []))
 
     def review_objective(

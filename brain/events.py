@@ -12,8 +12,13 @@ from .models import BrainEvent, DataSensitivity
 
 
 class EventBus:
-    def __init__(self) -> None:
-        self._events: list[BrainEvent] = []
+    def __init__(self, persistence=None) -> None:
+        self._persistence = persistence
+        self._events: list[BrainEvent] = (
+            []
+            if persistence is None
+            else list(persistence.events("brain_events", BrainEvent))
+        )
         self._subscribers: dict[str, list[tuple[str, Callable[[BrainEvent], None]]]] = {}
         self._acknowledged: set[tuple[str, str]] = set()
         self._in_flight: set[tuple[str, str]] = set()
@@ -51,6 +56,10 @@ class EventBus:
             raise ValueError("Event type, source, and correlation_id are required.")
         event = BrainEvent(secrets.token_urlsafe(18), event_type, source, deepcopy(payload), correlation_id, sensitivity)
         with self._lock:
+            if self._persistence is not None:
+                self._persistence.append_event(
+                    "brain_events", event_type, event.event_id, event
+                )
             self._events.append(event)
         return deepcopy(event)
 

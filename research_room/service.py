@@ -34,20 +34,23 @@ class ResearchRoomService:
         self.missions.create(mission)
         self.controller.transition(mission, MissionStatus.VALIDATING, actor_id=actor_id, reason="Mission intake validation")
         self.controller.transition(mission, MissionStatus.PLANNING, actor_id=actor_id, reason="Mission scope validated")
+        self.missions.replace(mission)
         return mission
 
     def plan_mission(self, mission_id: str, actor_id: str) -> tuple[ResearchTask, ...]:
         self.reliability.ensure_work_allowed("research mission planning")
         mission = self.missions.get(mission_id)
         planned = self.planner.plan(mission)
-        for task in planned: self.tasks.create(task)
         self.controller.validate_task_graph(mission, planned)
+        for task in planned: self.tasks.create(task)
         self.controller.transition(mission, MissionStatus.RESEARCHING, actor_id=actor_id, reason="Research tasks planned")
+        self.missions.replace(mission)
         return tuple(planned)
 
     def pause_mission(self, mission_id: str, actor_id: str, reason: str) -> ResearchMission:
         mission = self.missions.get(mission_id)
         self.controller.transition(mission, MissionStatus.PAUSED, actor_id=actor_id, reason=reason)
+        self.missions.replace(mission)
         return mission
 
     def resume_mission(self, mission_id: str, actor_id: str, reason: str) -> ResearchMission:
@@ -56,14 +59,17 @@ class ResearchRoomService:
         history = self.controller.history(mission_id)
         if not history: raise ValueError("Paused mission has no transition history.")
         self.controller.transition(mission, history[-1].from_status, actor_id=actor_id, reason=reason)
+        self.missions.replace(mission)
         return mission
 
     def cancel_mission(self, mission_id: str, actor_id: str, reason: str) -> ResearchMission:
         mission = self.missions.get(mission_id)
         self.controller.transition(mission, MissionStatus.CANCELLED, actor_id=actor_id, reason=reason)
+        self.missions.replace(mission)
         for task in self.tasks.for_mission(mission_id):
             if task.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}:
                 task.status = TaskStatus.CANCELLED
+                self.tasks.replace(task)
         return mission
 
     def progress(self, mission_id: str) -> object:
@@ -80,6 +86,8 @@ class ResearchRoomService:
                 self.controller.complete_task(task, schema_valid=result.data is not None, evidence_confidence=result.confidence)
             except (KeyError, PermissionError, ValueError) as error:
                 self.controller.record_failure(task, str(error))
+        for task in all_tasks:
+            self.tasks.replace(task)
         return tuple(ready)
 
     def report(self, mission_id: str, report_id: str) -> object:

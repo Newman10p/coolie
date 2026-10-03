@@ -50,7 +50,8 @@ class RateLimiter:
 class ToolGateway:
     def __init__(self, *, registry: ToolRegistry, authorizer: AuthorizationEngine, approvals: ApprovalRepository,
                  approval_policy: ApprovalPolicy, audit: AuditRepository, budgets: BudgetTracker,
-                 rate_limit_per_minute: int = 60, reliability: ReliabilityRuntime | None = None) -> None:
+                 rate_limit_per_minute: int = 60, reliability: ReliabilityRuntime | None = None,
+                 idempotency_store=None) -> None:
         self._registry = registry
         self._authorizer = authorizer
         self._approvals = approvals
@@ -66,7 +67,25 @@ class ToolGateway:
         # Idempotency ledger (§8.1 rule 7): a retried external action with the same
         # key returns the recorded result and NEVER touches the connector twice.
         self._executed: dict[str, tuple[str, ActionResult | None]] = {}
+        self._idempotency_store = idempotency_store
         self._idempotency_lock = RLock()
+
+    def bind_persistence(
+        self, *, approvals, approval_policy, audit, budgets, idempotency_store
+    ) -> None:
+        self._approvals = approvals
+        self._approval_policy = approval_policy
+        self._audit = audit
+        self._budgets = budgets
+        self._idempotency_store = idempotency_store
+
+    def _known_execution(self, replay_key: str) -> tuple[str, ActionResult | None] | None:
+        known = self._executed.get(replay_key)
+        if known is None and self._idempotency_store is not None:
+            known = self._idempotency_store.get(replay_key)
+            if known is not None:
+                self._executed[replay_key] = known
+        return known
 
     # -- wiring -------------------------------------------------------------
     def register_connector(self, account: ConnectorAccount, tool_names: tuple[str, ...],
@@ -131,7 +150,7 @@ class ToolGateway:
                 "requested_mode": context.requested_mode,
             })
             with self._idempotency_lock:
-                prior = self._executed.get(replay_key)
+                prior = self._known_execution(replay_key)
             if prior is not None:
                 if prior[0] != request_hash:
                     return self._deny(
@@ -198,7 +217,7 @@ class ToolGateway:
 
         if replay_key is not None and request_hash is not None:
             with self._idempotency_lock:
-                prior = self._executed.get(replay_key)
+                prior = self._known_execution(replay_key)
                 if prior is not None:
                     if prior[0] != request_hash:
                         return self._deny(
@@ -211,6 +230,23 @@ class ToolGateway:
                             "Action outcome is unresolved; reconcile it before retrying.",
                         )
                     return self._replay(context, request, request.idempotency_key, prior[1])
+                if self._idempotency_store is not None:
+                    prior = self._idempotency_store.claim(replay_key, request_hash)
+                    if prior is not None:
+                        self._executed[replay_key] = prior
+                        if prior[0] != request_hash:
+                            return self._deny(
+                                context, request, "idempotency_conflict",
+                                "Idempotency key was previously used with a different action binding.",
+                            )
+                        if prior[1] is None:
+                            return self._deny(
+                                context, request, "idempotency_in_progress",
+                                "Action outcome is unresolved; reconcile it before retrying.",
+                            )
+                        return self._replay(
+                            context, request, request.idempotency_key, prior[1]
+                        )
                 self._executed[replay_key] = (request_hash, None)
         ledger.reserve(definition.budget_type, cost)
         try:
@@ -221,6 +257,10 @@ class ToolGateway:
                     if replay_key is not None and request_hash is not None:
                         with self._idempotency_lock:
                             self._executed[replay_key] = (request_hash, result)
+                            if self._idempotency_store is not None:
+                                self._idempotency_store.complete(
+                                    replay_key, request_hash, result
+                                )
                     self._dry_run_previews.discard(preview_key)
                     if approval is not None and definition.mode is ToolMode.EXTERNAL_ACTION:
                         self._approval_policy.consume(approval)

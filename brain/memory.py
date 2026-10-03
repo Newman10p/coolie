@@ -6,7 +6,6 @@ from copy import deepcopy
 import json
 import secrets
 from threading import RLock
-from typing import Any
 
 from .models import AgentDefinition, ContextItem, ContextPackage, DataSensitivity, MemoryRecord, utc_now
 
@@ -20,9 +19,10 @@ _SENSITIVITY = {
 
 
 class MemoryStore:
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._records: dict[str, MemoryRecord] = {}
         self._lock = RLock()
+        self._persistence = persistence
 
     def write(self, agent: AgentDefinition, record: MemoryRecord) -> MemoryRecord:
         if record.namespace not in agent.allowed_memory_namespaces:
@@ -32,9 +32,12 @@ class MemoryStore:
         if record.expires_at is not None and record.expires_at <= utc_now():
             raise ValueError("Memory record is already expired.")
         with self._lock:
-            if record.memory_id in self._records:
-                raise ValueError(f"Memory record already exists: {record.memory_id}")
-            self._records[record.memory_id] = self._copy(record)
+            if self._persistence is None:
+                if record.memory_id in self._records:
+                    raise ValueError(f"Memory record already exists: {record.memory_id}")
+                self._records[record.memory_id] = self._copy(record)
+            else:
+                self._persistence.insert_record("brain_memory", record.memory_id, record)
         return self._copy(record)
 
     def retrieve(self, agent: AgentDefinition, *, namespace: str, query: str, top_k: int = 10) -> tuple[MemoryRecord, ...]:
@@ -48,7 +51,11 @@ class MemoryStore:
         now = utc_now()
         candidates = []
         with self._lock:
-            stored_records = tuple(self._records.values())
+            stored_records = (
+                tuple(self._records.values())
+                if self._persistence is None
+                else self._persistence.all_records("brain_memory", MemoryRecord)
+            )
         for record in stored_records:
             if record.namespace != namespace or (record.expires_at is not None and record.expires_at <= now):
                 continue
@@ -65,7 +72,12 @@ class MemoryStore:
     def get(self, agent: AgentDefinition, memory_id: str) -> MemoryRecord:
         try:
             with self._lock:
-                record = self._records[memory_id]
+                if self._persistence is None:
+                    record = self._records[memory_id]
+                else:
+                    record = self._persistence.get_record(
+                        "brain_memory", memory_id, MemoryRecord
+                    )
         except KeyError as error:
             raise KeyError(f"Unknown memory record: {memory_id}") from error
         if record.namespace not in agent.allowed_memory_namespaces:
@@ -79,7 +91,10 @@ class MemoryStore:
     def forget(self, agent: AgentDefinition, memory_id: str) -> MemoryRecord:
         record = self.get(agent, memory_id)
         with self._lock:
-            del self._records[memory_id]
+            if self._persistence is None:
+                del self._records[memory_id]
+            else:
+                self._persistence.delete_record("brain_memory", memory_id)
         return record
 
     @staticmethod

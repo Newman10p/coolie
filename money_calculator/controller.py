@@ -16,14 +16,32 @@ class FinanceReview:
 
 
 class MoneyCalculatorController:
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._history: dict[str, list[SpendRecommendation]] = {}
+        self._persistence = persistence
 
     def record(self, proposal: ActivationProposal, recommendation: SpendRecommendation) -> SpendRecommendation:
-        self._history.setdefault(proposal.proposal_id, []).append(recommendation)
+        if self._persistence is None:
+            self._history.setdefault(proposal.proposal_id, []).append(recommendation)
+        else:
+            self._persistence.put_record(
+                "finance_proposals", proposal.proposal_id, proposal
+            )
+            self._persistence.append_event(
+                "finance_recommendations",
+                proposal.proposal_id,
+                recommendation.recommendation_id,
+                recommendation,
+            )
         return recommendation
 
     def history(self, proposal_id: str) -> tuple[SpendRecommendation, ...]:
+        if self._persistence is not None:
+            return self._persistence.events(
+                "finance_recommendations",
+                SpendRecommendation,
+                stream_key=proposal_id,
+            )
         return tuple(self._history.get(proposal_id, []))
 
     def assess(
