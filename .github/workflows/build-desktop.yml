@@ -32,7 +32,8 @@ jobs:
       - name: Package a single Windows executable
         run: |
           New-Item -ItemType Directory -Force -Path release, build | Out-Null
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "dist;dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
+          $uiDist = (Resolve-Path dist).Path
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "$uiDist;dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
       - uses: actions/upload-artifact@v4
         with:
           name: Coolie-Windows
