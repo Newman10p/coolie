@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { KeyRound, LogOut, ShieldCheck } from "lucide-react";
+import { KeyRound, LogOut } from "lucide-react";
 import {
   initializeSupabaseAuth,
   saveDesktopSetup,
@@ -23,6 +23,10 @@ const EMPTY_SETUP: DesktopSetup = {
   COOLIE_RESEARCH_BROWSER_ALLOWED_HOSTS: "",
 };
 
+function isPasswordRecoveryRedirect(): boolean {
+  return new URLSearchParams(window.location.search).get("coolie_recovery") === "1";
+}
+
 export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,7 +36,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [setup, setSetup] = useState<DesktopSetup>(EMPTY_SETUP);
   const [setupMode, setSetupMode] = useState(false);
-  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(isPasswordRecoveryRedirect);
   const [recoverySent, setRecoverySent] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -99,7 +103,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     setNotice(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin,
+        redirectTo: `${window.location.origin}/?coolie_recovery=1`,
       });
       if (error) throw error;
       setRecoverySent(true);
@@ -156,6 +160,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       setRecoverySent(false);
       setPassword("");
       setConfirmPassword("");
+      window.history.replaceState({}, document.title, window.location.pathname);
       setNotice("Your owner password has been set.");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Could not update the password.");
