@@ -12,11 +12,14 @@ export interface DesktopSetup {
   OPENSEARCH_USERNAME: string;
   OPENSEARCH_PASSWORD: string;
   COOLIE_RESEARCH_BROWSER_ALLOWED_HOSTS: string;
+  COOLIE_AI_API_KEY: string;
+  CLEAR_COOLIE_AI_API_KEY: boolean;
 }
 
 export interface SupabaseBootstrap {
   authConfigured: boolean;
   configured: boolean;
+  aiKeyConfigured: boolean;
   supabaseUrl: string;
   supabaseAnonKey: string;
 }
@@ -69,6 +72,8 @@ export async function initializeSupabaseAuth(): Promise<SupabaseBootstrap> {
       typeof settings.authConfigured === "boolean" &&
       "configured" in settings &&
       typeof settings.configured === "boolean" &&
+      "aiKeyConfigured" in settings &&
+      typeof settings.aiKeyConfigured === "boolean" &&
       "supabaseUrl" in settings &&
       typeof settings.supabaseUrl === "string" &&
       "supabaseAnonKey" in settings &&
@@ -80,6 +85,7 @@ export async function initializeSupabaseAuth(): Promise<SupabaseBootstrap> {
       return {
         authConfigured: settings.authConfigured,
         configured: settings.configured,
+        aiKeyConfigured: settings.aiKeyConfigured,
         supabaseUrl: settings.supabaseUrl,
         supabaseAnonKey: settings.supabaseAnonKey,
       };
@@ -94,6 +100,7 @@ export async function initializeSupabaseAuth(): Promise<SupabaseBootstrap> {
     return {
       authConfigured: true,
       configured: true,
+      aiKeyConfigured: false,
       supabaseUrl,
       supabaseAnonKey,
     };

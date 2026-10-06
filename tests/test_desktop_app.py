@@ -63,11 +63,13 @@ class DesktopSetupTests(unittest.TestCase):
             self.assertEqual(json.loads(before["body"]), {
                 "authConfigured": False,
                 "configured": False,
+                "aiKeyConfigured": False,
                 "supabaseUrl": "",
                 "supabaseAnonKey": "",
             })
 
             settings = complete_setup()
+            settings["COOLIE_AI_API_KEY"] = "local-ai-provider-secret"
             saved = request(application, "POST", "/api/setup/config", payload=settings)
             self.assertEqual(saved["status"], "200 OK")
             self.assertEqual(json.loads(saved["body"]), {"saved": True})
@@ -81,6 +83,8 @@ class DesktopSetupTests(unittest.TestCase):
             self.assertTrue(payload["configured"])
             self.assertEqual(payload["supabaseAnonKey"], settings["SUPABASE_ANON_KEY"])
             self.assertNotIn(settings["SUPABASE_DB_PASSWORD"], after["body"].decode())
+            self.assertTrue(payload["aiKeyConfigured"])
+            self.assertNotIn(settings["COOLIE_AI_API_KEY"], after["body"].decode())
             if os.name != "nt":
                 self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
 
@@ -92,6 +96,17 @@ class DesktopSetupTests(unittest.TestCase):
             )
             self.assertEqual(saved_with_blank_fields["status"], "200 OK")
             self.assertIn("SUPABASE_DB_PASSWORD=local test secret", config_path.read_text(encoding="utf-8"))
+            self.assertIn("COOLIE_AI_API_KEY=local-ai-provider-secret", config_path.read_text(encoding="utf-8"))
+
+            removed_ai_key = request(
+                application,
+                "POST",
+                "/api/setup/config",
+                payload={"CLEAR_COOLIE_AI_API_KEY": True},
+            )
+            self.assertEqual(removed_ai_key["status"], "200 OK")
+            self.assertIn("COOLIE_AI_API_KEY=\n", config_path.read_text(encoding="utf-8"))
+            self.assertFalse(json.loads(request(application, "GET", "/api/setup/config")["body"])["aiKeyConfigured"])
 
             updated_auth = request(
                 application,
@@ -136,6 +151,7 @@ class DesktopSetupTests(unittest.TestCase):
             self.assertEqual(json.loads(public["body"]), {
                 "authConfigured": True,
                 "configured": False,
+                "aiKeyConfigured": False,
                 "supabaseUrl": "https://coolie-test.supabase.co",
                 "supabaseAnonKey": "public-test-anon",
             })
@@ -151,6 +167,13 @@ class DesktopSetupTests(unittest.TestCase):
                 payload={"SUPABASE_URL": "http://example.com", "SUPABASE_ANON_KEY": "test-key"},
             )
             self.assertEqual(invalid_url["status"], "400 Bad Request")
+            invalid_clear = request(
+                application,
+                "POST",
+                "/api/setup/config",
+                payload={"CLEAR_COOLIE_AI_API_KEY": "true"},
+            )
+            self.assertEqual(invalid_clear["status"], "400 Bad Request")
 
             remote = request(
                 application,

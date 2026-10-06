@@ -33,6 +33,7 @@ _ENV_KEYS = (
     "OPENSEARCH_USERNAME",
     "OPENSEARCH_PASSWORD",
     "COOLIE_RESEARCH_BROWSER_ALLOWED_HOSTS",
+    "COOLIE_AI_API_KEY",
 )
 
 
@@ -81,6 +82,8 @@ def _validate_setup(payload: object) -> dict[str, str]:
         raise ValueError("SUPABASE_REGION is invalid.")
     if len(values["SUPABASE_ANON_KEY"]) > 8192 or len(values["SUPABASE_DB_PASSWORD"]) > 2048:
         raise ValueError("A Supabase setting exceeds the allowed length.")
+    if len(values["COOLIE_AI_API_KEY"]) > 8192:
+        raise ValueError("COOLIE_AI_API_KEY exceeds the allowed length.")
     try:
         UUID(values["COOLIE_WORKSPACE_ID"])
     except ValueError as error:
@@ -176,6 +179,7 @@ class DesktopApplication:
             public_config = {
                 "authConfigured": bool(settings.get("SUPABASE_URL") and settings.get("SUPABASE_ANON_KEY")),
                 "configured": complete,
+                "aiKeyConfigured": bool(settings.get("COOLIE_AI_API_KEY")),
                 "supabaseUrl": settings.get("SUPABASE_URL", ""),
                 "supabaseAnonKey": settings.get("SUPABASE_ANON_KEY", ""),
             }
@@ -203,10 +207,17 @@ class DesktopApplication:
             else:
                 settings = _read_settings(self.config_path)
                 if isinstance(payload, dict):
+                    clear_ai_key = payload.get("CLEAR_COOLIE_AI_API_KEY", False)
+                    if not isinstance(clear_ai_key, bool):
+                        raise ValueError("CLEAR_COOLIE_AI_API_KEY must be a boolean.")
+                    if clear_ai_key:
+                        settings["COOLIE_AI_API_KEY"] = ""
                     for key, value in payload.items():
                         if key not in _ENV_KEYS:
                             continue
                         if isinstance(value, str) and not value.strip():
+                            if key == "COOLIE_AI_API_KEY" and clear_ai_key:
+                                settings[key] = ""
                             continue
                         settings[key] = value
                 settings = _validate_setup(settings)

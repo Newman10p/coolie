@@ -2,12 +2,18 @@ name: Build Coolie desktop installers
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: coolie-desktop-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -32,6 +38,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.2.0-dev' }}
+      VITE_COOLIE_BUILD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -114,7 +121,7 @@ jobs:
           path: release/${{ matrix.asset }}
           if-no-files-found: error
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -123,6 +130,28 @@ jobs:
           pattern: Coolie-*-Installer
           path: release
           merge-multiple: true
+      - name: Update rolling desktop release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push --force origin "${GITHUB_SHA}:refs/tags/desktop-latest"
+          gh release view desktop-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create desktop-latest --repo "$GITHUB_REPOSITORY" --title "Coolie latest desktop build" --notes "Rolling development build. Build commit: \`$GITHUB_SHA\`." --prerelease
+      - name: Publish rolling desktop installers
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: desktop-latest
+          name: Coolie latest desktop build
+          body: |
+            Latest development installers, rebuilt from `main` without requiring a version tag.
+
+            Build commit: `${{ github.sha }}`
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: release/*
       - name: Publish versioned installers
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2

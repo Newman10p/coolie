@@ -10,3 +10,6 @@ dist/
 supabase.env
 password.env
 supabase/.temp/
+*_PLAN.md
+ARCHITECTURE*.md
+/docs/

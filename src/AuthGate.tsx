@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { ArrowLeft, ArrowRight, KeyRound, LogOut, Sparkles } from "lucide-react";
+import { checkForDesktopUpdate, getCurrentDesktopBuild, type DesktopUpdate } from "./updates";
 import {
   initializeSupabaseAuth,
   saveDesktopAuthSettings,
@@ -16,6 +17,8 @@ const EMPTY_SETUP: DesktopSetup = {
   SUPABASE_ANON_KEY: "",
   SUPABASE_DB_PASSWORD: "",
   COOLIE_WORKSPACE_ID: "",
+  COOLIE_AI_API_KEY: "",
+  CLEAR_COOLIE_AI_API_KEY: false,
   FIRECRAWL_API_KEY: "",
   OPENSEARCH_URL: "",
   OPENSEARCH_INDEX: "",
@@ -48,6 +51,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [configured, setConfigured] = useState(false);
+  const [aiKeyConfigured, setAiKeyConfigured] = useState(false);
   const [authConfigured, setAuthConfigured] = useState(supabaseAuthConfigured);
   const [supabaseUrl, setSupabaseUrl] = useState("");
   const [supabaseAnonKey, setSupabaseAnonKey] = useState("");
@@ -62,6 +66,10 @@ export default function AuthGate({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateChecked, setUpdateChecked] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<DesktopUpdate | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -70,6 +78,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       if (!active) return;
       setAuthConfigured(bootstrap.authConfigured);
       setConfigured(bootstrap.configured);
+      setAiKeyConfigured(bootstrap.aiKeyConfigured);
       setSupabaseUrl(bootstrap.supabaseUrl);
       setSupabaseAnonKey(bootstrap.supabaseAnonKey);
       if (bootstrap.configured) {
@@ -165,6 +174,13 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     try {
       await saveDesktopSetup(setup);
       setConfigured(true);
+      setAiKeyConfigured(
+        setup.CLEAR_COOLIE_AI_API_KEY
+          ? false
+          : Boolean(setup.COOLIE_AI_API_KEY.trim()) || aiKeyConfigured,
+      );
+      setSetup((current) => ({ ...current, COOLIE_AI_API_KEY: "", CLEAR_COOLIE_AI_API_KEY: false }));
+      setNotice("Local settings saved.");
       await completeOnboarding();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Could not save Coolie setup.");
@@ -302,6 +318,19 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     }
   }
 
+  async function checkUpdates() {
+    setUpdateChecking(true);
+    setUpdateError(null);
+    try {
+      setAvailableUpdate(await checkForDesktopUpdate());
+      setUpdateChecked(true);
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : "Could not check for updates.");
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
   function loadPreferences(ownerSession: Session) {
     const metadata = ownerSession.user.user_metadata;
     setFullName(typeof metadata?.coolie_full_name === "string" ? metadata.coolie_full_name : "");
@@ -320,6 +349,13 @@ export default function AuthGate({ children }: { children: ReactNode }) {
     return (
       <>
         {children}
+        <div className={`fixed left-4 top-4 z-[60] max-w-[calc(100%-12rem)] rounded-full border px-3 py-2 text-xs shadow-lg backdrop-blur ${
+          aiKeyConfigured
+            ? "border-amber-200/20 bg-amber-950/80 text-amber-100"
+            : "border-white/10 bg-slate-950/80 text-slate-300"
+        }`}>
+          {aiKeyConfigured ? "AI key saved · provider integration pending" : "Awaiting AI provider API key"}
+        </div>
         <button
           className="fixed right-4 top-4 z-[60] flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-300 shadow-lg backdrop-blur transition hover:border-white/20 hover:text-white"
           onClick={() => void signOut()}
@@ -335,6 +371,39 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         >
           Local settings
         </button>
+        <button
+          className="fixed right-4 top-24 z-[60] rounded-full border border-white/10 bg-slate-950/80 px-3 py-2 text-xs text-slate-300 shadow-lg backdrop-blur transition hover:border-white/20 hover:text-white disabled:opacity-60"
+          onClick={() => void checkUpdates()}
+          type="button"
+          disabled={updateChecking}
+        >
+          {updateChecking ? "Checking updates…" : "Check for updates"}
+        </button>
+        {updateError && (
+          <p role="alert" className="fixed right-4 top-36 z-[60] max-w-sm rounded-lg border border-red-300/20 bg-red-950/90 px-3 py-2 text-xs text-red-100">
+            {updateError}
+          </p>
+        )}
+        {updateChecked && !availableUpdate && (
+          <p role="status" className="fixed right-4 top-36 z-[60] rounded-lg border border-white/10 bg-slate-950/90 px-3 py-2 text-xs text-slate-300">
+            Coolie is up to date ({getCurrentDesktopBuild().slice(0, 7)}).
+          </p>
+        )}
+        {availableUpdate && (
+          <section className="fixed right-4 top-36 z-[60] w-[min(24rem,calc(100vw-2rem))] rounded-xl border border-blue-200/20 bg-slate-950/95 p-4 text-xs text-slate-200 shadow-2xl">
+            <h2 className="font-semibold text-blue-100">A Coolie update is available</h2>
+            <p className="my-2 text-slate-400">Build {availableUpdate.commit.slice(0, 7)}. Download the installer for your device, close Coolie, and run it to update.</p>
+            <ul className="space-y-2">
+              {availableUpdate.assets.map((asset) => (
+                <li key={asset.name}>
+                  <a className="text-blue-200 underline hover:text-white" href={asset.url} target="_blank" rel="noreferrer">
+                    {asset.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {errorMessage && (
           <p role="alert" className="fixed right-4 top-16 z-[60] rounded-lg border border-red-300/20 bg-red-950/90 px-3 py-2 text-xs text-red-100">
             {errorMessage}
@@ -521,7 +590,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         Database values stay in this computer’s local settings file; only the public anon key is sent to the browser. Do not enter a service-role key. Leave fields blank when editing to keep the saved value.
       </p>
       <p className="mb-5 text-[11px] leading-relaxed text-slate-500">
-        Find the database password in Supabase project settings. Use the existing Coolie workspace UUID. Research provider settings are optional and can be added later.
+        Find the database password in Supabase project settings. Use the existing Coolie workspace UUID. Add your AI provider key below when ready; provider integration must also be configured to enable AI features.
       </p>
       <form onSubmit={(event) => void submitSetup(event)}>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -529,6 +598,39 @@ export default function AuthGate({ children }: { children: ReactNode }) {
           <SetupField label="Supabase database password" value={setup.SUPABASE_DB_PASSWORD} required={!configured} secret onChange={(value) => updateSetup("SUPABASE_DB_PASSWORD", value)} placeholder={configured ? "Leave blank to keep current value" : undefined} />
           <SetupField label="Coolie workspace UUID" value={setup.COOLIE_WORKSPACE_ID} required={!configured} onChange={(value) => updateSetup("COOLIE_WORKSPACE_ID", value)} placeholder={configured ? "Leave blank to keep current value" : undefined} />
         </div>
+        <section className="mb-5 rounded-xl border border-blue-200/15 bg-blue-950/20 p-4">
+          <h2 className="text-sm font-semibold text-slate-100">AI provider API key</h2>
+          <p className="my-2 text-xs leading-relaxed text-slate-400">
+            {aiKeyConfigured
+              ? "A key is saved on this computer. Leave the field empty to keep it, or replace it below."
+              : "Coolie is ready for provider setup. Add your provider key here; it is stored locally and never returned to the browser."}
+            {" "}Saving a key stores it securely for development but does not activate AI features until a compatible provider service is configured.
+          </p>
+          <SetupField
+            label="AI provider API key"
+            value={setup.COOLIE_AI_API_KEY}
+            secret
+            onChange={(value) => updateSetup("COOLIE_AI_API_KEY", value)}
+            placeholder={aiKeyConfigured ? "Leave blank to keep current key" : "Paste provider API key"}
+          />
+          {aiKeyConfigured && (
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input
+                type="checkbox"
+                checked={setup.CLEAR_COOLIE_AI_API_KEY}
+                onChange={(event) => {
+                  const clear = event.target.checked;
+                  setSetup((current) => ({
+                    ...current,
+                    COOLIE_AI_API_KEY: "",
+                    CLEAR_COOLIE_AI_API_KEY: clear,
+                  }));
+                }}
+              />
+              Remove the saved AI key
+            </label>
+          )}
+        </section>
         <details className="mt-5 rounded-xl border border-white/10 bg-slate-950/30 p-4">
           <summary className="cursor-pointer text-xs font-semibold text-blue-100">Optional research provider settings</summary>
           <p className="my-3 text-xs leading-relaxed text-slate-400">Provider credentials stay on this computer. They do not activate integrations unless an operator-configured service factory enables them.</p>
@@ -555,6 +657,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       ...current,
       SUPABASE_URL: supabaseUrl,
       SUPABASE_ANON_KEY: supabaseAnonKey,
+      ...(key === "COOLIE_AI_API_KEY" ? { CLEAR_COOLIE_AI_API_KEY: false } : {}),
       [key]: value,
     }));
   }
