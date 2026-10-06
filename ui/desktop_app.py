@@ -105,6 +105,27 @@ def _validate_setup(payload: object) -> dict[str, str]:
     return values
 
 
+def _validate_auth_setup(payload: object) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise ValueError("Connection setup must be a JSON object.")
+    url = payload.get("SUPABASE_URL", "")
+    anon_key = payload.get("SUPABASE_ANON_KEY", "")
+    if not isinstance(url, str) or not isinstance(anon_key, str):
+        raise ValueError("Supabase project URL and public anon key must be strings.")
+    url = url.strip()
+    anon_key = anon_key.strip()
+    if len(url) > 2048 or any(character in url for character in "\r\n\x00"):
+        raise ValueError("SUPABASE_URL must be a valid single-line project URL.")
+    parsed_url = urlsplit(url)
+    if parsed_url.scheme != "https" or not parsed_url.hostname or not parsed_url.hostname.endswith(".supabase.co"):
+        raise ValueError("SUPABASE_URL must be an HTTPS Supabase project URL.")
+    if parsed_url.path or parsed_url.query or parsed_url.fragment or parsed_url.username or parsed_url.password:
+        raise ValueError("SUPABASE_URL must contain only the project origin.")
+    if not anon_key or len(anon_key) > 8192 or any(character in anon_key for character in "\r\n\x00"):
+        raise ValueError("SUPABASE_ANON_KEY must be a valid single-line public key.")
+    return {"SUPABASE_URL": url, "SUPABASE_ANON_KEY": anon_key}
+
+
 class DesktopApplication:
     """Serve the local setup flow, static UI, and supported wallet API."""
 
@@ -141,7 +162,7 @@ class DesktopApplication:
     def _setup_route(self, environ: dict[str, object], start_response: Callable, method: str, path: str) -> list[bytes]:
         if not self._is_local_request(environ):
             return self._json(start_response, "403 Forbidden", {"error": "Coolie desktop setup is available only from this local computer."})
-        if path != "/api/setup/config":
+        if path not in {"/api/setup/config", "/api/setup/auth"}:
             return self._json(start_response, "404 Not Found", {"error": "Unknown setup route."})
         if method == "GET":
             settings = _read_settings(self.config_path)
@@ -153,6 +174,7 @@ class DesktopApplication:
                 "COOLIE_WORKSPACE_ID",
             ))
             public_config = {
+                "authConfigured": bool(settings.get("SUPABASE_URL") and settings.get("SUPABASE_ANON_KEY")),
                 "configured": complete,
                 "supabaseUrl": settings.get("SUPABASE_URL", ""),
                 "supabaseAnonKey": settings.get("SUPABASE_ANON_KEY", ""),
@@ -174,7 +196,20 @@ class DesktopApplication:
             if stream is None:
                 raise ValueError("Setup request body is missing.")
             payload = json.loads(stream.read(length))
-            settings = _validate_setup(payload)
+            if path == "/api/setup/auth":
+                auth_settings = _validate_auth_setup(payload)
+                settings = _read_settings(self.config_path)
+                settings.update(auth_settings)
+            else:
+                settings = _read_settings(self.config_path)
+                if isinstance(payload, dict):
+                    for key, value in payload.items():
+                        if key not in _ENV_KEYS:
+                            continue
+                        if isinstance(value, str) and not value.strip():
+                            continue
+                        settings[key] = value
+                settings = _validate_setup(settings)
             self._save_settings(settings)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError) as error:
             return self._json(start_response, "400 Bad Request", {"error": str(error)})

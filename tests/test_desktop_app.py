@@ -61,6 +61,7 @@ class DesktopSetupTests(unittest.TestCase):
             before = request(application, "GET", "/api/setup/config")
             self.assertEqual(before["status"], "200 OK")
             self.assertEqual(json.loads(before["body"]), {
+                "authConfigured": False,
                 "configured": False,
                 "supabaseUrl": "",
                 "supabaseAnonKey": "",
@@ -76,12 +77,92 @@ class DesktopSetupTests(unittest.TestCase):
 
             after = request(application, "GET", "/api/setup/config")
             payload = json.loads(after["body"])
+            self.assertTrue(payload["authConfigured"])
             self.assertTrue(payload["configured"])
             self.assertEqual(payload["supabaseAnonKey"], settings["SUPABASE_ANON_KEY"])
             self.assertNotIn(settings["SUPABASE_DB_PASSWORD"], after["body"].decode())
             if os.name != "nt":
                 self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
+
+            saved_with_blank_fields = request(
+                application,
+                "POST",
+                "/api/setup/config",
+                payload={"SUPABASE_URL": "", "SUPABASE_ANON_KEY": ""},
+            )
+            self.assertEqual(saved_with_blank_fields["status"], "200 OK")
+            self.assertIn("SUPABASE_DB_PASSWORD=local test secret", config_path.read_text(encoding="utf-8"))
+
+            updated_auth = request(
+                application,
+                "POST",
+                "/api/setup/auth",
+                payload={
+                    "SUPABASE_URL": "https://updated-test.supabase.co",
+                    "SUPABASE_ANON_KEY": "updated-public-key",
+                },
+            )
+            self.assertEqual(updated_auth["status"], "200 OK")
+            self.assertIn("SUPABASE_DB_PASSWORD=local test secret", config_path.read_text(encoding="utf-8"))
+            public_after_update = request(application, "GET", "/api/setup/config")
+            self.assertTrue(json.loads(public_after_update["body"])["configured"])
+            self.assertNotIn("local test secret", public_after_update["body"].decode())
             application.close()
+
+    def test_auth_bootstrap_saves_only_the_supabase_public_connection(self):
+        with TemporaryDirectory() as directory:
+            config_path = Path(directory) / "settings.env"
+            application = DesktopApplication(config_path)
+            saved = request(
+                application,
+                "POST",
+                "/api/setup/auth",
+                payload={
+                    "SUPABASE_URL": "https://coolie-test.supabase.co",
+                    "SUPABASE_ANON_KEY": "public-test-anon",
+                },
+            )
+            self.assertEqual(saved["status"], "200 OK")
+            self.assertEqual(json.loads(saved["body"]), {"saved": True})
+            self.assertEqual(
+                config_path.read_text(encoding="utf-8").splitlines()[:3],
+                [
+                    "SUPABASE_URL=https://coolie-test.supabase.co",
+                    "SUPABASE_REGION=",
+                    "SUPABASE_ANON_KEY=public-test-anon",
+                ],
+            )
+            public = request(application, "GET", "/api/setup/config")
+            self.assertEqual(json.loads(public["body"]), {
+                "authConfigured": True,
+                "configured": False,
+                "supabaseUrl": "https://coolie-test.supabase.co",
+                "supabaseAnonKey": "public-test-anon",
+            })
+            application.close()
+
+    def test_auth_bootstrap_rejects_invalid_project_urls_and_remote_origins(self):
+        with TemporaryDirectory() as directory:
+            application = DesktopApplication(Path(directory) / "settings.env")
+            invalid_url = request(
+                application,
+                "POST",
+                "/api/setup/auth",
+                payload={"SUPABASE_URL": "http://example.com", "SUPABASE_ANON_KEY": "test-key"},
+            )
+            self.assertEqual(invalid_url["status"], "400 Bad Request")
+
+            remote = request(
+                application,
+                "POST",
+                "/api/setup/auth",
+                payload={
+                    "SUPABASE_URL": "https://coolie-test.supabase.co",
+                    "SUPABASE_ANON_KEY": "test-key",
+                },
+                origin="https://attacker.example",
+            )
+            self.assertEqual(remote["status"], "403 Forbidden")
 
     def test_setup_requires_workspace_and_rejects_remote_origin(self):
         with TemporaryDirectory() as directory:

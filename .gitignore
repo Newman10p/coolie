@@ -8,4 +8,5 @@ dist/
 .env.*
 !.env.example
 supabase.env
+password.env
 supabase/.temp/

@@ -1,4 +1,4 @@
-name: Build Coolie desktop application
+name: Build Coolie desktop installers
 
 on:
   push:
@@ -10,8 +10,28 @@ permissions:
   contents: write
 
 jobs:
-  windows-onefile:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows
+            artifact: Coolie-Windows-Installer
+            asset: Coolie-Windows-Setup.exe
+          - os: macos-15-intel
+            artifact: Coolie-macOS-Intel-Installer
+            asset: Coolie-macOS-Intel.dmg
+          - os: macos-15
+            artifact: Coolie-macOS-Apple-Silicon-Installer
+            asset: Coolie-macOS-Apple-Silicon.dmg
+          - os: ubuntu-22.04
+            platform: Linux
+            artifact: Coolie-Linux-Installer
+            asset: Coolie-Linux-x86_64.sh
+    runs-on: ${{ matrix.os }}
+    env:
+      APP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.2.0-dev' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,19 +49,71 @@ jobs:
         run: python -m pip install "pyinstaller>=6.14,<7" "psycopg[binary,pool]>=3.2,<4" "PyYAML>=6,<7"
       - name: Run Python tests
         run: python -m unittest discover -s tests -v
-      - name: Package a single Windows executable
+      - name: Install Windows installer compiler
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup --yes --no-progress
+      - name: Package Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release, build | Out-Null
           $uiDist = (Resolve-Path dist).Path
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "$uiDist;dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:APP_VERSION" installer/Coolie.iss
+      - name: Package macOS disk image
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p release build
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "$PWD/dist:dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
+          mkdir -p release/mac-dmg
+          cp -R release/Coolie.app release/mac-dmg/Coolie.app
+          ln -s /Applications release/mac-dmg/Applications
+          hdiutil create -volname Coolie -srcfolder release/mac-dmg -ov -format UDZO "release/${{ matrix.asset }}"
+          release/Coolie.app/Contents/MacOS/Coolie --help
+          mkdir -p "$RUNNER_TEMP/CoolieMounted"
+          hdiutil attach "release/${{ matrix.asset }}" -nobrowse -mountpoint "$RUNNER_TEMP/CoolieMounted"
+          test -d "$RUNNER_TEMP/CoolieMounted/Coolie.app"
+          test -L "$RUNNER_TEMP/CoolieMounted/Applications"
+          hdiutil detach "$RUNNER_TEMP/CoolieMounted"
+      - name: Package Linux installer
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p release build
+          python -m PyInstaller --noconfirm --clean --onefile --name Coolie --distpath release --workpath build/pyinstaller --specpath build --add-data "$PWD/dist:dist" --collect-all psycopg --collect-all psycopg_pool coolie_desktop.py
+          release/Coolie --help
+          bash scripts/package-linux-installer.sh release/Coolie release/Coolie-Linux-x86_64.sh
+          mkdir -p "$RUNNER_TEMP/coolie-linux-smoke-home"
+          HOME="$RUNNER_TEMP/coolie-linux-smoke-home" sh release/Coolie-Linux-x86_64.sh
+          "$RUNNER_TEMP/coolie-linux-smoke-home/.local/opt/coolie/Coolie" --help
+          test -f "$RUNNER_TEMP/coolie-linux-smoke-home/.local/share/applications/coolie.desktop"
+      - name: Verify Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installPath = Join-Path $env:RUNNER_TEMP "Coolie smoke test"
+          & release/Coolie-Windows-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installPath"
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer smoke test failed." }
+          & "$installPath\Coolie.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Packaged application smoke test failed." }
       - uses: actions/upload-artifact@v4
         with:
-          name: Coolie-Windows
-          path: release/Coolie.exe
+          name: ${{ matrix.artifact }}
+          path: release/${{ matrix.asset }}
           if-no-files-found: error
-      - name: Publish versioned release
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Coolie-*-Installer
+          path: release
+          merge-multiple: true
+      - name: Publish versioned installers
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/Coolie.exe
+          files: release/*
           generate_release_notes: true
