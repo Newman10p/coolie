@@ -92,8 +92,11 @@ jobs:
         shell: pwsh
         run: |
           $installPath = Join-Path $env:RUNNER_TEMP "Coolie smoke test"
-          & release/Coolie-Windows-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installPath"
-          if ($LASTEXITCODE -ne 0) { throw "Windows installer smoke test failed." }
+          $installLog = Join-Path $env:RUNNER_TEMP "Coolie installer smoke test.log"
+          & release/Coolie-Windows-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installPath" "/LOG=$installLog"
+          $installExitCode = $LASTEXITCODE
+          if (Test-Path $installLog) { Get-Content $installLog -Tail 60 }
+          if ($installExitCode -ne 0) { throw "Windows installer smoke test failed with exit code $installExitCode." }
           & "$installPath\Coolie.exe" --help
           if ($LASTEXITCODE -ne 0) { throw "Packaged application smoke test failed." }
       - uses: actions/upload-artifact@v4
