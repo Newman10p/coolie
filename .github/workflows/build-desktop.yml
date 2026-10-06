@@ -93,12 +93,21 @@ jobs:
         run: |
           $installPath = Join-Path $env:RUNNER_TEMP "Coolie smoke test"
           $installLog = Join-Path $env:RUNNER_TEMP "Coolie installer smoke test.log"
-          & release/Coolie-Windows-Setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART "/DIR=$installPath" "/LOG=$installLog"
-          $installExitCode = $LASTEXITCODE
+          $installerPath = Join-Path $PWD "release/Coolie-Windows-Setup.exe"
+          if (-not (Test-Path $installerPath)) { throw "Windows installer output was not found at $installerPath." }
+          $installerProcess = Start-Process -FilePath $installerPath -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/DIR=`"$installPath`"",
+            "/LOG=`"$installLog`""
+          ) -Wait -PassThru
           if (Test-Path $installLog) { Get-Content $installLog -Tail 60 }
-          if ($installExitCode -ne 0) { throw "Windows installer smoke test failed with exit code $installExitCode." }
-          & "$installPath\Coolie.exe" --help
-          if ($LASTEXITCODE -ne 0) { throw "Packaged application smoke test failed." }
+          if ($installerProcess.ExitCode -ne 0) { throw "Windows installer smoke test failed with exit code $($installerProcess.ExitCode)." }
+          $appPath = Join-Path $installPath "Coolie.exe"
+          if (-not (Test-Path $appPath)) { throw "Windows installer did not create $appPath." }
+          $appProcess = Start-Process -FilePath $appPath -ArgumentList @("--help") -Wait -PassThru -NoNewWindow
+          if ($appProcess.ExitCode -ne 0) { throw "Packaged application smoke test failed with exit code $($appProcess.ExitCode)." }
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
