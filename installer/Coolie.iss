@@ -11,7 +11,7 @@ DefaultDirName={localappdata}\Programs\Coolie
 DefaultGroupName=Coolie
 PrivilegesRequired=lowest
 ArchitecturesInstallIn64BitMode=x64
-OutputDir=release
+OutputDir=..\release
 OutputBaseFilename=Coolie-Windows-Setup
 Compression=lzma2
 SolidCompression=yes
@@ -19,7 +19,7 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\Coolie.exe
 
 [Files]
-Source: "release\Coolie.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\release\Coolie.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Coolie"; Filename: "{app}\Coolie.exe"; WorkingDir: "{app}"
